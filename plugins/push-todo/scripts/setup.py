@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
 """
-OAuth web flow setup for Push integration.
+Smart setup for Push integration.
 
-This script opens a browser for Sign in with Apple authentication,
-linking Claude Code or OpenAI Codex with your Push account automatically.
+This script handles both initial authentication AND project registration:
+- First time: Opens browser for Sign in with Apple, saves credentials
+- Subsequent: Uses existing credentials for instant project registration
 
 Usage:
     python setup.py                      # Default: Claude Code
     python setup.py --client claude-code # Explicit: Claude Code
     python setup.py --client openai-codex # For OpenAI Codex
+    python setup.py --reauth             # Force re-authentication
 
-The flow:
-    1. Request a device code from Push
-    2. Open browser to pushto.do/auth/cli
-    3. User clicks "Sign in with Apple"
-    4. Poll for authorization
-    5. Save API key automatically
-
-No manual code entry or iPhone interaction needed!
-
-See: /docs/20260113_oauth_web_flow_implementation_plan.md
+See: /docs/20260114_cli_action_auto_creation_implementation_plan.md
 """
 
 import argparse
 import json
 import os
 import platform
+import subprocess
 import sys
 import time
 import webbrowser
@@ -45,6 +39,10 @@ class SlowDownError(Exception):
         self.new_interval = new_interval
 
 
+# ============================================================================
+# CONFIG FILE HELPERS
+# ============================================================================
+
 def get_existing_key() -> Optional[str]:
     """Get existing API key from config."""
     if os.path.exists(CONFIG_FILE):
@@ -52,7 +50,6 @@ def get_existing_key() -> Optional[str]:
             with open(CONFIG_FILE) as f:
                 for line in f:
                     if line.startswith("export PUSH_API_KEY="):
-                        # Extract key from: export PUSH_API_KEY="push_xxx"
                         key = line.split("=", 1)[1].strip().strip('"\'')
                         return key if key else None
         except Exception:
@@ -60,21 +57,48 @@ def get_existing_key() -> Optional[str]:
     return None
 
 
-def save_config(api_key: str):
-    """Save API key to config file."""
+def get_existing_email() -> Optional[str]:
+    """Get existing email from config."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                for line in f:
+                    if line.startswith("export PUSH_EMAIL="):
+                        email = line.split("=", 1)[1].strip().strip('"\'')
+                        return email if email else None
+        except Exception:
+            pass
+    return None
+
+
+def save_config(api_key: str, email: str):
+    """Save API key and email to config file."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
 
     with open(CONFIG_FILE, 'w') as f:
         f.write(f'export PUSH_API_KEY="{api_key}"\n')
+        f.write(f'export PUSH_EMAIL="{email}"\n')
 
     # Set restrictive permissions
     os.chmod(CONFIG_FILE, 0o600)
 
 
+def clear_config():
+    """Clear the config file (for re-auth)."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            os.remove(CONFIG_FILE)
+        except Exception:
+            pass
+
+
+# ============================================================================
+# CONTEXT COLLECTION
+# ============================================================================
+
 def get_device_name() -> str:
     """Get the computer's hostname for device identification."""
     try:
-        # platform.node() returns the computer's network name
         return platform.node() or "Unknown Device"
     except Exception:
         return "Unknown Device"
@@ -94,7 +118,6 @@ def get_git_remote() -> Optional[str]:
     Returns the origin remote URL, or None if not a git repo or no origin.
     This is used for git-first project identification.
     """
-    import subprocess
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
@@ -109,21 +132,81 @@ def get_git_remote() -> Optional[str]:
         return None
 
 
+# ============================================================================
+# LIGHTWEIGHT PROJECT REGISTRATION (FAST PATH)
+# ============================================================================
+
+def register_project(api_key: str, client_type: str = "claude-code") -> dict:
+    """
+    Register current project using existing API key.
+
+    This is the "fast path" - no browser needed, instant registration.
+
+    Returns dict with:
+        - status: "success", "unauthorized", or "error"
+        - action_name: Name of the action (if success)
+        - created: True if new, False if existing (if success)
+        - message: Human-readable message
+    """
+    client_names = {
+        "claude-code": "Claude Code",
+        "openai-codex": "OpenAI Codex"
+    }
+
+    req = urllib.request.Request(
+        f"{API_BASE}/register-project",
+        data=json.dumps({
+            "client_type": client_type,
+            "client_name": client_names.get(client_type, "Claude Code"),
+            "device_name": get_device_name(),
+            "project_path": get_project_path(),
+            "git_remote": get_git_remote(),
+        }).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST"
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            if data.get("success"):
+                return {
+                    "status": "success",
+                    "action_name": data.get("action_name", "Unknown"),
+                    "created": data.get("created", True),
+                    "message": data.get("message", ""),
+                }
+            return {"status": "error", "message": "Unknown error"}
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return {"status": "unauthorized", "message": "API key invalid or revoked"}
+        try:
+            body = json.loads(e.read().decode())
+            return {"status": "error", "message": body.get("error_description", str(e))}
+        except Exception:
+            return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ============================================================================
+# FULL DEVICE AUTH FLOW (SLOW PATH)
+# ============================================================================
+
 def initiate_device_flow(client_type: str = "claude-code") -> dict:
     """Request a new device code from the server.
 
     Sends git_remote (if available) for git-first project identification.
     Falls back to project_path when not in a git repo.
     """
-    # Map client_type to display name
     client_names = {
         "claude-code": "Claude Code",
         "openai-codex": "OpenAI Codex"
     }
     client_name = client_names.get(client_type, "Claude Code")
-
-    # Git-first: include git remote URL if available
-    git_remote = get_git_remote()
 
     req = urllib.request.Request(
         f"{API_BASE}/device-auth/init",
@@ -133,7 +216,7 @@ def initiate_device_flow(client_type: str = "claude-code") -> dict:
             "client_version": "1.0.0",
             "device_name": get_device_name(),
             "project_path": get_project_path(),
-            "git_remote": git_remote  # Git-first identification
+            "git_remote": get_git_remote(),
         }).encode(),
         headers={"Content-Type": "application/json"},
         method="POST"
@@ -162,36 +245,20 @@ def poll_status(device_code: str) -> dict:
         raise
 
 
-def main():
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Setup Push integration")
-    parser.add_argument(
-        "--client",
-        choices=["claude-code", "openai-codex"],
-        default="claude-code",
-        help="Client type (default: claude-code)"
-    )
-    args = parser.parse_args()
+def do_full_device_auth(client_type: str = "claude-code") -> dict:
+    """
+    Full device auth flow with browser sign-in.
 
-    client_type = args.client
-    client_display_names = {
+    Returns dict with:
+        - api_key: The new API key
+        - email: User's email from Apple Sign-In
+        - action_name: Name of the created action
+    """
+    client_names = {
         "claude-code": "Claude Code",
         "openai-codex": "OpenAI Codex"
     }
-    client_name = client_display_names.get(client_type, "Claude Code")
-
-    print()
-    print(f"  Push Voice Tasks Setup ({client_name})")
-    print("  " + "=" * 40)
-    print()
-
-    # Check if already configured - just inform, don't block
-    # Running setup again is safe and will simply refresh the API key
-    existing_key = get_existing_key()
-    if existing_key:
-        print(f"  Note: Already configured with key: {existing_key[:12]}...")
-        print("  Continuing will generate a new key (old key will be revoked).")
-        print()
+    client_name = client_names.get(client_type, "Claude Code")
 
     # Initiate device code flow
     print("  Initializing...")
@@ -205,7 +272,7 @@ def main():
     expires_in = device_data["expires_in"]
     interval = device_data.get("interval", 5)
 
-    # Get the web OAuth URL (uses device_code, not user_code)
+    # Get the web OAuth URL
     auth_url = device_data.get("verification_uri_complete",
                                f"https://pushto.do/auth/cli?code={device_code}")
 
@@ -214,7 +281,6 @@ def main():
     print("  Opening browser for Sign in with Apple...")
     print()
 
-    # Try to open browser
     browser_opened = webbrowser.open(auth_url)
 
     if browser_opened:
@@ -244,18 +310,15 @@ def main():
 
             if result["status"] == "authorized":
                 api_key = result.get("api_key")
+                email = result.get("email", "Unknown")
+                action_name = result.get("action_name", client_name)
+
                 if api_key:
-                    save_config(api_key)
-                    print()
-                    print("  " + "=" * 40)
-                    print("  ✓ Connected!")
-                    print("  " + "=" * 40)
-                    print()
-                    print(f"  API key saved to {CONFIG_FILE}")
-                    print()
-                    print("  You can now use 'push-todo' to view your tasks.")
-                    print()
-                    return
+                    return {
+                        "api_key": api_key,
+                        "email": email,
+                        "action_name": action_name,
+                    }
                 else:
                     print()
                     print("  Error: Authorization succeeded but no API key received.")
@@ -282,8 +345,7 @@ def main():
 
         except SlowDownError as e:
             poll_interval = e.new_interval
-        except urllib.error.URLError as e:
-            # Network error, continue polling
+        except urllib.error.URLError:
             sys.stdout.write(f"\r  Network error, retrying...              ")
             sys.stdout.flush()
         except Exception as e:
@@ -291,6 +353,109 @@ def main():
             sys.stdout.flush()
 
         time.sleep(poll_interval)
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Setup Push integration")
+    parser.add_argument(
+        "--client",
+        choices=["claude-code", "openai-codex"],
+        default="claude-code",
+        help="Client type (default: claude-code)"
+    )
+    parser.add_argument(
+        "--reauth",
+        action="store_true",
+        help="Force re-authentication (get new API key)"
+    )
+    args = parser.parse_args()
+
+    client_type = args.client
+    client_names = {
+        "claude-code": "Claude Code",
+        "openai-codex": "OpenAI Codex"
+    }
+    client_name = client_names.get(client_type, "Claude Code")
+
+    print()
+    print(f"  Push Voice Tasks Setup")
+    print("  " + "=" * 40)
+    print()
+
+    # Check for --reauth flag
+    if args.reauth:
+        print("  Forcing re-authentication...")
+        clear_config()
+
+    existing_key = get_existing_key()
+    existing_email = get_existing_email()
+
+    if existing_key and existing_email and not args.reauth:
+        # ─────────────────────────────────────────────────────────────────
+        # FAST PATH: Already authenticated, just register project
+        # ─────────────────────────────────────────────────────────────────
+        print(f"  Connected as {existing_email}")
+        print("  Registering project...")
+
+        result = register_project(existing_key, client_type)
+
+        if result["status"] == "success":
+            print()
+            print("  " + "=" * 40)
+            if result["created"]:
+                print(f'  Created action: "{result["action_name"]}"')
+            else:
+                print(f'  Found existing action: "{result["action_name"]}"')
+            print("  " + "=" * 40)
+            print()
+            if result["created"]:
+                print("  Your iOS app will sync this automatically.")
+            else:
+                print("  This project is already configured.")
+            print()
+            return
+
+        elif result["status"] == "unauthorized":
+            print()
+            print("  Session expired, re-authenticating...")
+            print()
+            clear_config()
+            # Fall through to full auth
+
+        else:
+            print()
+            print(f"  Registration failed: {result.get('message', 'Unknown error')}")
+            print("  Trying full setup...")
+            print()
+            # Fall through to full auth
+
+    # ─────────────────────────────────────────────────────────────────────
+    # SLOW PATH: First time or re-auth needed
+    # ─────────────────────────────────────────────────────────────────────
+    is_reauth = existing_key is not None
+
+    result = do_full_device_auth(client_type)
+
+    # Save credentials
+    save_config(result["api_key"], result["email"])
+
+    # Show success
+    print()
+    print("  " + "=" * 40)
+    if is_reauth:
+        print(f'  Re-connected as {result["email"]}')
+    else:
+        print(f'  Connected as {result["email"]}')
+    print(f'  Created action: "{result["action_name"]}"')
+    print("  " + "=" * 40)
+    print()
+    print("  Your iOS app will sync this automatically.")
+    print()
 
 
 if __name__ == "__main__":
