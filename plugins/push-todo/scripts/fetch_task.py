@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """
 Fetch and display pending Push tasks.
-Version: 1.1.0 (with caching)
+Version: 1.2.0 (with project scoping)
 
 This script retrieves pending tasks from the Push iOS app and outputs them
 in a format suitable for Claude Code to process.
+
+## Project Scoping (Default)
+By default, only tasks for the CURRENT PROJECT are shown (based on git remote).
+Use --all-projects to see tasks from all projects.
 
 Two-call system for fast response:
 1. Session start hook prefetches and caches all tasks
 2. This script reads from cache for instant display
 
 Usage:
-    python fetch_task.py [--all] [--mark-started TASK_ID] [--mark-completed TASK_ID]
+    python fetch_task.py [--all] [--all-projects] [--mark-started TASK_ID] [--mark-completed TASK_ID]
 
 Options:
-    --all              Fetch all pending tasks (default: first task only)
+    --all              Fetch all pending tasks for current project (default: first task only)
+    --all-projects     Fetch tasks from ALL projects (not just current)
     --mark-started ID  Mark a task as started (also removes from cache)
     --mark-completed ID Mark a task as completed (also removes from cache)
     --refresh          Force refresh from database (updates cache)
@@ -32,6 +37,7 @@ Output format (JSON):
                 "content": "Full task content",
                 "transcript": "Optional voice transcript",
                 "project_hint": "Optional project hint",
+                "git_remote": "Optional git remote for project scoping",
                 "created_at": "ISO timestamp"
             }
         ]
@@ -42,8 +48,10 @@ import os
 import sys
 import json
 import argparse
+import subprocess
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -52,6 +60,50 @@ API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 CACHE_DIR = Path.home() / ".config" / "push" / "cache"
 CACHE_FILE = CACHE_DIR / "tasks.json"
 CACHE_MAX_AGE_SECONDS = 300  # 5 minutes
+
+
+def get_git_remote() -> str | None:
+    """
+    Get the normalized git remote URL for the current directory.
+
+    Returns:
+        Normalized git remote (e.g., "github.com/user/repo") or None if not a git repo.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode != 0:
+            return None
+
+        url = result.stdout.strip()
+        if not url:
+            return None
+
+        # Normalize: remove protocol, convert : to /, remove .git
+        # git@github.com:user/repo.git → github.com/user/repo
+        # https://github.com/user/repo.git → github.com/user/repo
+
+        # Remove protocol prefixes
+        for prefix in ["https://", "http://", "git@", "ssh://git@"]:
+            if url.startswith(prefix):
+                url = url[len(prefix):]
+                break
+
+        # Convert : to / (for git@ style)
+        if ":" in url and "://" not in url:
+            url = url.replace(":", "/", 1)
+
+        # Remove .git suffix
+        if url.endswith(".git"):
+            url = url[:-4]
+
+        return url
+    except Exception:
+        return None
 
 
 def get_api_key() -> str:
@@ -105,10 +157,21 @@ def remove_from_cache(task_id: str) -> None:
     save_cache(tasks)
 
 
-def fetch_tasks_from_api() -> list:
-    """Fetch all pending tasks from API."""
+def fetch_tasks_from_api(git_remote: str | None = None) -> list:
+    """
+    Fetch pending tasks from API.
+
+    Args:
+        git_remote: If provided, only fetch tasks for this project.
+                   If None, fetches ALL tasks (no project filter).
+    """
     api_key = get_api_key()
     url = f"{API_BASE_URL}/claude-tasks"
+
+    # Add git_remote filter if provided
+    if git_remote:
+        encoded_remote = urllib.parse.quote(git_remote, safe="")
+        url = f"{url}?git_remote={encoded_remote}"
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {api_key}")
@@ -126,36 +189,48 @@ def fetch_tasks_from_api() -> list:
         raise ValueError(f"Network error: {e.reason}")
 
 
-def get_tasks(force_refresh: bool = False) -> list:
+def get_tasks(force_refresh: bool = False, git_remote: str | None = None) -> list:
     """
     Get tasks, using cache when available.
 
+    Args:
+        force_refresh: If True, always fetch from API.
+        git_remote: If provided, filter tasks to this project only.
+                   The cache stores ALL tasks; filtering is done client-side.
+
     Priority:
     1. If force_refresh, fetch from API
-    2. If cache exists and is fresh, use cache
+    2. If cache exists and is fresh, use cache (filtered by git_remote)
     3. If cache is stale, fetch from API
     4. If API fails and cache exists, use stale cache
     """
+    def filter_by_project(tasks: list) -> list:
+        """Filter tasks to current project if git_remote provided."""
+        if not git_remote:
+            return tasks
+        return [t for t in tasks if t.get("git_remote") == git_remote]
+
     if force_refresh:
+        # Fetch all tasks (no server-side filter) to populate cache
         tasks = fetch_tasks_from_api()
         save_cache(tasks)
-        return tasks
+        return filter_by_project(tasks)
 
     cached_tasks, is_stale = load_cache()
 
     if cached_tasks and not is_stale:
-        # Cache is fresh, use it immediately
-        return cached_tasks
+        # Cache is fresh, use it immediately (filtered)
+        return filter_by_project(cached_tasks)
 
     # Cache is stale or empty, try to refresh
     try:
         tasks = fetch_tasks_from_api()
         save_cache(tasks)
-        return tasks
+        return filter_by_project(tasks)
     except Exception:
         # API failed, fall back to stale cache if available
         if cached_tasks:
-            return cached_tasks
+            return filter_by_project(cached_tasks)
         raise
 
 
@@ -226,7 +301,8 @@ def format_task_for_display(task: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch pending Push tasks")
-    parser.add_argument("--all", action="store_true", help="Fetch all pending tasks")
+    parser.add_argument("--all", action="store_true", help="Fetch all pending tasks for current project")
+    parser.add_argument("--all-projects", action="store_true", help="Fetch tasks from ALL projects (not just current)")
     parser.add_argument("--mark-started", metavar="ID", help="Mark a task as started")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
     parser.add_argument("--refresh", action="store_true", help="Force refresh from database")
@@ -254,18 +330,27 @@ def main():
                 sys.exit(1)
             return
 
+        # Determine project filter
+        # By default, scope to current project (git remote)
+        # Use --all-projects to disable project filtering
+        git_remote = None if args.all_projects else get_git_remote()
+
         # Fetch tasks (from cache or API)
-        tasks = get_tasks(force_refresh=args.refresh)
+        tasks = get_tasks(force_refresh=args.refresh, git_remote=git_remote)
 
         if not tasks:
-            print("No pending tasks from Push.")
+            if git_remote:
+                print(f"No pending tasks for this project.")
+            else:
+                print("No pending tasks from Push.")
             sys.exit(0)
 
         # Output
         if args.json:
             print(json.dumps({"tasks": tasks}, indent=2))
         elif args.all:
-            print(f"# {len(tasks)} Pending Tasks from Push\n")
+            scope = "this project" if git_remote else "all projects"
+            print(f"# {len(tasks)} Pending Tasks ({scope})\n")
             for i, task in enumerate(tasks, 1):
                 print(f"---\n### Task {i}\n")
                 print(format_task_for_display(task))
