@@ -88,14 +88,42 @@ def get_project_path() -> str:
         return ""
 
 
+def get_git_remote() -> Optional[str]:
+    """Get the git remote URL (origin) if in a git repo.
+
+    Returns the origin remote URL, or None if not a git repo or no origin.
+    This is used for git-first project identification.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+        return None
+    except Exception:
+        return None
+
+
 def initiate_device_flow(client_type: str = "claude-code") -> dict:
-    """Request a new device code from the server."""
+    """Request a new device code from the server.
+
+    Sends git_remote (if available) for git-first project identification.
+    Falls back to project_path when not in a git repo.
+    """
     # Map client_type to display name
     client_names = {
         "claude-code": "Claude Code",
         "openai-codex": "OpenAI Codex"
     }
     client_name = client_names.get(client_type, "Claude Code")
+
+    # Git-first: include git remote URL if available
+    git_remote = get_git_remote()
 
     req = urllib.request.Request(
         f"{API_BASE}/device-auth/init",
@@ -104,7 +132,8 @@ def initiate_device_flow(client_type: str = "claude-code") -> dict:
             "client_type": client_type,
             "client_version": "1.0.0",
             "device_name": get_device_name(),
-            "project_path": get_project_path()
+            "project_path": get_project_path(),
+            "git_remote": git_remote  # Git-first identification
         }).encode(),
         headers={"Content-Type": "application/json"},
         method="POST"
