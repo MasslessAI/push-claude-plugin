@@ -127,6 +127,27 @@ Each task includes:
 - `git_remote`: Normalized git remote URL for project scoping (e.g., "github.com/user/repo")
 - `created_at`: When the task was captured
 
+## Auto-Updates
+
+The plugin checks for updates from GitHub at each session start:
+
+| Behavior | When |
+|----------|------|
+| Silent | Plugin is up-to-date |
+| Notification | Newer version available on GitHub |
+| Auto-update | `PUSH_PLUGIN_AUTO_UPDATE=true` is set |
+
+**Update notification example:**
+```
+[Push] Update available: push-todo v1.0.0 → v1.1.0
+[Push] Run: cd ~/.claude/skills/push-todo && git pull
+```
+
+**Enable auto-updates:**
+```bash
+export PUSH_PLUGIN_AUTO_UPDATE=true
+```
+
 ## Error Handling
 
 If the API returns an error:
