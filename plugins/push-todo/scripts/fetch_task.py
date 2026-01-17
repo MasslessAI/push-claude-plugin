@@ -1,27 +1,34 @@
 #!/usr/bin/env python3
 """
 Fetch and display pending Push tasks.
-Version: 1.2.0 (with project scoping)
+Version: 3.0.0 (unified hub architecture)
 
 This script retrieves pending tasks from the Push iOS app and outputs them
 in a format suitable for Claude Code to process.
+
+## Unified Hub Architecture (v3.0 - 2026-01-16)
+
+Uses the synced-todos endpoint ONLY (normalized tables: todos + todo_actions).
+The legacy claude-tasks endpoint has been removed.
+
+Tasks become visible when:
+1. User assigns a Claude Code action to a todo in Push
+2. Action has completionBehavior = .automatic (auto-sync enabled)
+3. Todo syncs to Supabase via sync-push with sync_enabled = true
+4. CLI queries synced-todos which filters by sync_enabled
 
 ## Project Scoping (Default)
 By default, only tasks for the CURRENT PROJECT are shown (based on git remote).
 Use --all-projects to see tasks from all projects.
 
-Two-call system for fast response:
-1. Session start hook prefetches and caches all tasks
-2. This script reads from cache for instant display
-
 Usage:
-    python fetch_task.py [--all] [--all-projects] [--mark-started TASK_ID] [--mark-completed TASK_ID]
+    python fetch_task.py [--all] [--all-projects] [--pinned] [--mark-completed TASK_ID]
 
 Options:
     --all              Fetch all pending tasks for current project (default: first task only)
     --all-projects     Fetch tasks from ALL projects (not just current)
-    --mark-started ID  Mark a task as started (also removes from cache)
-    --mark-completed ID Mark a task as completed (also removes from cache)
+    --pinned           Only show pinned (focused) tasks, or prioritize them at the top
+    --mark-completed ID Mark a task as completed (syncs back to Push)
     --refresh          Force refresh from database (updates cache)
     --json             Output raw JSON
 
@@ -33,15 +40,20 @@ Output format (JSON):
         "tasks": [
             {
                 "id": "uuid",
+                "display_number": "Human-readable number (#1, #2, #3...)",
                 "summary": "Task summary",
                 "content": "Full task content",
                 "transcript": "Optional voice transcript",
                 "project_hint": "Optional project hint",
                 "git_remote": "Optional git remote for project scoping",
+                "is_focused": "Boolean indicating if task is pinned",
                 "created_at": "ISO timestamp"
             }
         ]
     }
+
+See: /docs/20260116_unified_hub_action_execution_architecture.md
+     /docs/20260116_unified_hub_gap_analysis.md
 """
 
 import os
@@ -108,11 +120,50 @@ def get_git_remote() -> Optional[str]:
 
 
 def get_api_key() -> str:
-    """Get API key from environment."""
+    """
+    Get API key from config file or environment.
+
+    Priority:
+    1. Environment variable (for CI/testing)
+    2. Config file at ~/.config/push/config (production)
+    3. Error with helpful message
+
+    Returns:
+        The API key string.
+
+    Raises:
+        ValueError: If API key is not found in either location.
+    """
+    # 1. Try environment first (for CI/testing, backward compatibility)
     key = os.environ.get("PUSH_API_KEY")
-    if not key:
-        raise ValueError("PUSH_API_KEY environment variable not set")
-    return key
+    if key:
+        return key
+
+    # 2. Read from config file (production - more reliable)
+    config_path = Path.home() / ".config" / "push" / "config"
+    if config_path.exists():
+        try:
+            # Parse bash-style config (export VAR="value")
+            for line in config_path.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("export PUSH_API_KEY="):
+                    # Extract value after = and remove quotes
+                    value = line.split("=", 1)[1].strip()
+                    # Remove surrounding quotes if present
+                    key = value.strip('"').strip("'")
+                    if key:
+                        return key
+        except Exception:
+            # Config file exists but couldn't parse - fall through to error
+            pass
+
+    # 3. Not found - provide helpful error message
+    raise ValueError(
+        "PUSH_API_KEY not configured.\n"
+        "Run: /push-todo setup\n"
+        "Or manually add to ~/.config/push/config:\n"
+        '  export PUSH_API_KEY="your-key-here"'
+    )
 
 
 def load_cache() -> Tuple[List, bool]:
@@ -160,19 +211,28 @@ def remove_from_cache(task_id: str) -> None:
 
 def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
     """
-    Fetch pending tasks from API.
+    Fetch pending tasks from the synced-todos endpoint.
+
+    Uses the unified hub architecture - all tasks come from the normalized
+    tables (todos + todo_actions with sync_enabled=true).
 
     Args:
         git_remote: If provided, only fetch tasks for this project.
-                   If None, fetches ALL tasks (no project filter).
+                   The endpoint looks up the action_id from cli_action_registrations.
+                   If None, fetches ALL synced tasks across all projects.
+
+    Returns:
+        List of tasks for this project, or all synced tasks if no git_remote.
     """
     api_key = get_api_key()
-    url = f"{API_BASE_URL}/claude-tasks"
 
-    # Add git_remote filter if provided
+    # Build URL - with git_remote for project-scoped, without for all projects
     if git_remote:
         encoded_remote = urllib.parse.quote(git_remote, safe="")
-        url = f"{url}?git_remote={encoded_remote}"
+        url = f"{API_BASE_URL}/synced-todos?git_remote={encoded_remote}"
+    else:
+        # No git_remote = fetch ALL synced tasks (for --all-projects)
+        url = f"{API_BASE_URL}/synced-todos"
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {api_key}")
@@ -181,10 +241,28 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             data = json.loads(response.read().decode())
-            return data.get("tasks", [])
+            # Convert synced-todos response format to match expected format
+            todos = data.get("todos", [])
+            return [
+                {
+                    "id": t.get("id"),
+                    "display_number": t.get("displayNumber"),  # Human-readable #1, #2, #3...
+                    "summary": t.get("summary") or t.get("title", "No summary"),
+                    "content": t.get("normalizedContent") or t.get("summary") or "",
+                    "transcript": t.get("originalTranscript"),
+                    "project_hint": None,  # Not included in synced-todos response
+                    "git_remote": git_remote,  # Store for reference (may be None for all-projects)
+                    "is_focused": t.get("isFocused", False),  # Pinned status
+                    "created_at": t.get("createdAt"),
+                }
+                for t in todos
+            ]
     except urllib.error.HTTPError as e:
         if e.code == 401:
             raise ValueError("Invalid API key. Run 'push setup' to configure.")
+        if e.code == 404:
+            # No action registered for this project
+            return []
         raise
     except urllib.error.URLError as e:
         raise ValueError(f"Network error: {e.reason}")
@@ -196,14 +274,18 @@ def get_tasks(force_refresh: bool = False, git_remote: Optional[str] = None) -> 
 
     Args:
         force_refresh: If True, always fetch from API.
-        git_remote: If provided, filter tasks to this project only.
-                   The cache stores ALL tasks; filtering is done client-side.
+        git_remote: If provided, fetch tasks for this project only.
+                   If None, fetch ALL synced tasks across all projects.
 
     Priority:
     1. If force_refresh, fetch from API
-    2. If cache exists and is fresh, use cache (filtered by git_remote)
+    2. If cache exists and is fresh, use cache (filtered by git_remote if provided)
     3. If cache is stale, fetch from API
     4. If API fails and cache exists, use stale cache
+
+    UPDATED 2026-01-17: The synced-todos endpoint now supports:
+    - With git_remote: Fetch tasks for that specific project
+    - Without git_remote: Fetch ALL synced tasks (for --all-projects flag)
     """
     def filter_by_project(tasks: List) -> List:
         """Filter tasks to current project if git_remote provided."""
@@ -212,10 +294,10 @@ def get_tasks(force_refresh: bool = False, git_remote: Optional[str] = None) -> 
         return [t for t in tasks if t.get("git_remote") == git_remote]
 
     if force_refresh:
-        # Fetch all tasks (no server-side filter) to populate cache
-        tasks = fetch_tasks_from_api()
+        # Fetch tasks for this project (git_remote is required by API)
+        tasks = fetch_tasks_from_api(git_remote)
         save_cache(tasks)
-        return filter_by_project(tasks)
+        return tasks  # Already filtered by server
 
     cached_tasks, is_stale = load_cache()
 
@@ -225,9 +307,9 @@ def get_tasks(force_refresh: bool = False, git_remote: Optional[str] = None) -> 
 
     # Cache is stale or empty, try to refresh
     try:
-        tasks = fetch_tasks_from_api()
+        tasks = fetch_tasks_from_api(git_remote)
         save_cache(tasks)
-        return filter_by_project(tasks)
+        return tasks  # Already filtered by server
     except Exception:
         # API failed, fall back to stale cache if available
         if cached_tasks:
@@ -235,50 +317,56 @@ def get_tasks(force_refresh: bool = False, git_remote: Optional[str] = None) -> 
         raise
 
 
-def mark_task_started(task_id: str) -> bool:
-    """Mark a task as started and remove from cache."""
-    api_key = get_api_key()
-    url = f"{API_BASE_URL}/claude-tasks/{task_id}/start"
-
-    req = urllib.request.Request(url, method="POST")
-    req.add_header("Authorization", f"Bearer {api_key}")
-    req.add_header("Content-Type", "application/json")
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            if response.status == 200:
-                # Remove from cache since it's no longer pending
-                remove_from_cache(task_id)
-                return True
-            return False
-    except urllib.error.HTTPError:
-        return False
-
-
 def mark_task_completed(task_id: str) -> bool:
-    """Mark a task as completed and remove from cache."""
-    api_key = get_api_key()
-    url = f"{API_BASE_URL}/claude-tasks/{task_id}/complete"
+    """
+    Mark a task as completed using the todo-status endpoint.
 
-    req = urllib.request.Request(url, method="POST")
+    This syncs the completion back to the Push iOS app via the unified hub.
+
+    Args:
+        task_id: The UUID of the todo to mark as completed.
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    api_key = get_api_key()
+    url = f"{API_BASE_URL}/todo-status"
+
+    body = json.dumps({
+        "todoId": task_id,
+        "isCompleted": True,
+        "completedAt": datetime.now(timezone.utc).isoformat()
+    }).encode()
+
+    req = urllib.request.Request(url, data=body, method="PATCH")
     req.add_header("Authorization", f"Bearer {api_key}")
     req.add_header("Content-Type", "application/json")
 
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             if response.status == 200:
-                # Remove from cache since it's no longer pending
                 remove_from_cache(task_id)
                 return True
             return False
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            # Task not found - might have been deleted or already completed
+            remove_from_cache(task_id)  # Clean up cache anyway
+            return False
+        return False
+    except urllib.error.URLError:
         return False
 
 
 def format_task_for_display(task: dict) -> str:
     """Format a task for human-readable display."""
     lines = []
-    lines.append(f"## Task: {task.get('summary', 'No summary')}")
+
+    # Build task header with display number and pinned indicator
+    display_num = task.get("display_number")
+    pinned_prefix = "📌 " if task.get("is_focused") else ""
+    num_prefix = f"#{display_num} " if display_num else ""
+    lines.append(f"## Task: {num_prefix}{pinned_prefix}{task.get('summary', 'No summary')}")
     lines.append("")
 
     if task.get("project_hint"):
@@ -295,6 +383,8 @@ def format_task_for_display(task: dict) -> str:
         lines.append("")
 
     lines.append(f"**Task ID:** `{task.get('id', 'unknown')}`")
+    if display_num:
+        lines.append(f"**Display Number:** #{display_num}")
     lines.append(f"**Created:** {task.get('created_at', 'unknown')}")
 
     return "\n".join(lines)
@@ -304,23 +394,13 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch pending Push tasks")
     parser.add_argument("--all", action="store_true", help="Fetch all pending tasks for current project")
     parser.add_argument("--all-projects", action="store_true", help="Fetch tasks from ALL projects (not just current)")
-    parser.add_argument("--mark-started", metavar="ID", help="Mark a task as started")
+    parser.add_argument("--pinned", action="store_true", help="Only show pinned tasks, or prioritize them at the top")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
     parser.add_argument("--refresh", action="store_true", help="Force refresh from database")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     args = parser.parse_args()
 
     try:
-        # Handle mark-started
-        if args.mark_started:
-            success = mark_task_started(args.mark_started)
-            if success:
-                print(f"Task {args.mark_started} marked as started")
-            else:
-                print(f"Failed to mark task {args.mark_started} as started", file=sys.stderr)
-                sys.exit(1)
-            return
-
         # Handle mark-completed
         if args.mark_completed:
             success = mark_task_completed(args.mark_completed)
@@ -339,8 +419,24 @@ def main():
         # Fetch tasks (from cache or API)
         tasks = get_tasks(force_refresh=args.refresh, git_remote=git_remote)
 
+        # Handle --pinned flag: filter to only pinned tasks, or sort pinned first
+        if args.pinned:
+            pinned_tasks = [t for t in tasks if t.get("is_focused")]
+            if pinned_tasks:
+                # If there are pinned tasks, show only those
+                tasks = pinned_tasks
+            # If no pinned tasks, fall through to show all (with pinned sorted first)
+            else:
+                # Sort to put any pinned tasks first (in case of future additions)
+                tasks = sorted(tasks, key=lambda t: (not t.get("is_focused", False)))
+        else:
+            # Always sort pinned tasks first, even without --pinned flag
+            tasks = sorted(tasks, key=lambda t: (not t.get("is_focused", False)))
+
         if not tasks:
-            if git_remote:
+            if args.pinned:
+                print("No pinned tasks found.")
+            elif git_remote:
                 print(f"No pending tasks for this project.")
             else:
                 print("No pending tasks from Push.")
@@ -351,9 +447,13 @@ def main():
             print(json.dumps({"tasks": tasks}, indent=2))
         elif args.all:
             scope = "this project" if git_remote else "all projects"
-            print(f"# {len(tasks)} Pending Tasks ({scope})\n")
+            pinned_suffix = ", pinned only" if args.pinned else ""
+            print(f"# {len(tasks)} Pending Tasks ({scope}{pinned_suffix})\n")
             for i, task in enumerate(tasks, 1):
-                print(f"---\n### Task {i}\n")
+                # Use display_number if available, otherwise fall back to loop index
+                display_num = task.get("display_number")
+                task_label = f"#{display_num}" if display_num else f"Task {i}"
+                print(f"---\n### {task_label}\n")
                 print(format_task_for_display(task))
                 print()
         else:

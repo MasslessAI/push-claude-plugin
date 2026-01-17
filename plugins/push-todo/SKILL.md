@@ -62,9 +62,10 @@ For fast response times, this skill uses a prefetch + cache architecture:
 
 ### CLI Options
 ```bash
-fetch_task.py [--all] [--all-projects] [--refresh] [--json]
+fetch_task.py [--all] [--all-projects] [--pinned] [--refresh] [--json]
   --all           Show all pending tasks for current project (default: first task only)
   --all-projects  Show tasks from ALL projects (not just current)
+  --pinned        Only show pinned (focused) tasks
   --refresh       Force refresh from API (bypass cache)
   --json          Output raw JSON format
 ```
@@ -74,8 +75,10 @@ fetch_task.py [--all] [--all-projects] [--refresh] [--json]
 When the user wants to see their tasks, run:
 
 ```bash
-source ~/.config/push/config && python3 ~/.claude/skills/push-todo/scripts/fetch_task.py
+python3 ~/.claude/skills/push-todo/scripts/fetch_task.py
 ```
+
+Note: The script reads the API key from `~/.config/push/config` automatically.
 
 This returns a list of pending tasks. Present them clearly:
 
@@ -139,7 +142,10 @@ Each task includes:
 - `transcript`: Original voice transcript (if user wants raw input)
 - `project_hint`: Human-readable project name (e.g., "Push", "AppleWhisper")
 - `git_remote`: Normalized git remote URL for project scoping (e.g., "github.com/user/repo")
+- `is_focused`: Boolean indicating if the task is pinned/focused (prioritized)
 - `created_at`: When the task was captured
+
+**Pinned Tasks:** Tasks marked as pinned in the Push app will appear with a 📌 indicator and are automatically sorted to the top of the list. Use `--pinned` to filter to only pinned tasks.
 
 ## Auto-Updates
 

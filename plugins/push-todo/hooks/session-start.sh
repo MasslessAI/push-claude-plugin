@@ -30,22 +30,14 @@ if [ -n "$UPDATE_MSG" ]; then
     echo "$UPDATE_MSG"
 fi
 
-# Check if API key is configured
-if [ -z "$PUSH_API_KEY" ]; then
-    # Try to load from config file
-    CONFIG_FILE="$HOME/.config/push/config"
-    if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE"
-    fi
-fi
+# Check for pending tasks
+# Note: Python script now reads config file directly, no need to source
+COUNT=$(python3 "$PLUGIN_DIR/scripts/check_tasks.py" 2>/dev/null)
 
-# Skip if still no API key (plugin not configured)
-if [ -z "$PUSH_API_KEY" ]; then
+# If script failed (e.g., no API key configured), exit silently
+if [ $? -ne 0 ]; then
     exit 0
 fi
-
-# Check for pending tasks
-COUNT=$(python3 "$PLUGIN_DIR/scripts/check_tasks.py" 2>/dev/null)
 
 # Only output if there are tasks
 if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ]; then
