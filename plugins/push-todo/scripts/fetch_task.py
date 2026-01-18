@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fetch and display active Push tasks.
-Version: 3.1.0 (unified hub architecture)
+Version: 4.0.0 (no cache - always fresh)
 
 This script retrieves active tasks from the Push iOS app and outputs them
 in a format suitable for Claude Code to process.
@@ -66,13 +66,10 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
 # Configuration
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
-CACHE_DIR = Path.home() / ".config" / "push" / "cache"
-CACHE_FILE = CACHE_DIR / "tasks.json"
-CACHE_MAX_AGE_SECONDS = 300  # 5 minutes
 
 
 def get_git_remote() -> Optional[str]:
@@ -166,49 +163,6 @@ def get_api_key() -> str:
     )
 
 
-def load_cache() -> Tuple[List, bool]:
-    """
-    Load tasks from cache.
-    Returns (tasks, is_stale) tuple.
-    """
-    if not CACHE_FILE.exists():
-        return [], True
-
-    try:
-        cache_data = json.loads(CACHE_FILE.read_text())
-        tasks = cache_data.get("tasks", [])
-        cached_at_str = cache_data.get("cached_at", "")
-
-        # Check staleness
-        if cached_at_str:
-            cached_at = datetime.fromisoformat(cached_at_str.replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - cached_at).total_seconds()
-            is_stale = age > CACHE_MAX_AGE_SECONDS
-        else:
-            is_stale = True
-
-        return tasks, is_stale
-    except (json.JSONDecodeError, ValueError):
-        return [], True
-
-
-def save_cache(tasks: List) -> None:
-    """Save tasks to cache file."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_data = {
-        "tasks": tasks,
-        "cached_at": datetime.now(timezone.utc).isoformat()
-    }
-    CACHE_FILE.write_text(json.dumps(cache_data, indent=2))
-
-
-def remove_from_cache(task_id: str) -> None:
-    """Remove a task from the cache."""
-    tasks, _ = load_cache()
-    tasks = [t for t in tasks if t.get("id") != task_id]
-    save_cache(tasks)
-
-
 def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
     """
     Fetch active tasks from the synced-todos endpoint.
@@ -268,53 +222,20 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
         raise ValueError(f"Network error: {e.reason}")
 
 
-def get_tasks(force_refresh: bool = False, git_remote: Optional[str] = None) -> List:
+def get_tasks(git_remote: Optional[str] = None) -> List:
     """
-    Get tasks, using cache when available.
+    Get tasks - always fetches fresh from API.
 
     Args:
-        force_refresh: If True, always fetch from API.
         git_remote: If provided, fetch tasks for this project only.
                    If None, fetch ALL synced tasks across all projects.
 
-    Priority:
-    1. If force_refresh, fetch from API
-    2. If cache exists and is fresh, use cache (filtered by git_remote if provided)
-    3. If cache is stale, fetch from API
-    4. If API fails and cache exists, use stale cache
+    Returns:
+        List of tasks from the synced-todos endpoint.
 
-    UPDATED 2026-01-17: The synced-todos endpoint now supports:
-    - With git_remote: Fetch tasks for that specific project
-    - Without git_remote: Fetch ALL synced tasks (for --all-projects flag)
+    Version 4.0: Removed caching - always returns fresh data from Supabase.
     """
-    def filter_by_project(tasks: List) -> List:
-        """Filter tasks to current project if git_remote provided."""
-        if not git_remote:
-            return tasks
-        return [t for t in tasks if t.get("git_remote") == git_remote]
-
-    if force_refresh:
-        # Fetch tasks for this project (git_remote is required by API)
-        tasks = fetch_tasks_from_api(git_remote)
-        save_cache(tasks)
-        return tasks  # Already filtered by server
-
-    cached_tasks, is_stale = load_cache()
-
-    if cached_tasks and not is_stale:
-        # Cache is fresh, use it immediately (filtered)
-        return filter_by_project(cached_tasks)
-
-    # Cache is stale or empty, try to refresh
-    try:
-        tasks = fetch_tasks_from_api(git_remote)
-        save_cache(tasks)
-        return tasks  # Already filtered by server
-    except Exception:
-        # API failed, fall back to stale cache if available
-        if cached_tasks:
-            return filter_by_project(cached_tasks)
-        raise
+    return fetch_tasks_from_api(git_remote)
 
 
 def mark_task_completed(task_id: str) -> bool:
@@ -344,15 +265,8 @@ def mark_task_completed(task_id: str) -> bool:
 
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            if response.status == 200:
-                remove_from_cache(task_id)
-                return True
-            return False
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            # Task not found - might have been deleted or already completed
-            remove_from_cache(task_id)  # Clean up cache anyway
-            return False
+            return response.status == 200
+    except urllib.error.HTTPError:
         return False
     except urllib.error.URLError:
         return False
@@ -396,7 +310,7 @@ def main():
     parser.add_argument("--all-projects", action="store_true", help="Fetch tasks from ALL projects (not just current)")
     parser.add_argument("--pinned", action="store_true", help="Only show pinned tasks, or prioritize them at the top")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
-    parser.add_argument("--refresh", action="store_true", help="Force refresh from database")
+    parser.add_argument("--refresh", action="store_true", help="(deprecated, no-op) Always fetches fresh")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     args = parser.parse_args()
 
@@ -416,8 +330,8 @@ def main():
         # Use --all-projects to disable project filtering
         git_remote = None if args.all_projects else get_git_remote()
 
-        # Fetch tasks (from cache or API)
-        tasks = get_tasks(force_refresh=args.refresh, git_remote=git_remote)
+        # Fetch tasks (always fresh from API)
+        tasks = get_tasks(git_remote=git_remote)
 
         # Handle --pinned flag: filter to only pinned tasks, or sort pinned first
         if args.pinned:

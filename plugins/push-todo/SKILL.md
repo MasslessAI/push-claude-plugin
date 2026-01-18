@@ -45,28 +45,23 @@ The user can explicitly request all projects with:
 - "Show me tasks from all projects"
 - "Check other projects"
 
-## Architecture: Two-Call Caching System
+## Architecture: Always Fresh
 
-For fast response times, this skill uses a prefetch + cache architecture:
+**Version 4.0:** This skill always fetches fresh data from Supabase. No caching.
 
 | Step | Script | What Happens | Latency |
 |------|--------|--------------|---------|
-| **Session start** | `check_tasks.py` | Fetches all tasks from API, caches locally, outputs count | ~1s (network) |
-| **User runs /push-todo** | `fetch_task.py` | Reads from cache instantly | ~70ms |
+| **Session start** | `check_tasks.py` | Fetches task count from API | ~500ms |
+| **User runs /push-todo** | `fetch_task.py` | Fetches fresh tasks from API | ~500ms |
 
-### Cache Details
-- **Location:** `~/.config/push/cache/tasks.json`
-- **Max age:** 5 minutes (auto-refreshes if stale)
-- **Invalidation:** Tasks removed from cache when marked started/completed
-- **Fallback:** If API fails, shows stale cache; if cache missing, fetches from API
+This ensures you always see the latest state from the Push app.
 
 ### CLI Options
 ```bash
-fetch_task.py [--all] [--all-projects] [--pinned] [--refresh] [--json]
+fetch_task.py [--all] [--all-projects] [--pinned] [--json]
   --all           Show all active tasks for current project (default: first task only)
   --all-projects  Show tasks from ALL projects (not just current)
   --pinned        Only show pinned (focused) tasks
-  --refresh       Force refresh from API (bypass cache)
   --json          Output raw JSON format
 ```
 

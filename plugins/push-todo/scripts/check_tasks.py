@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-Prefetch and cache active Push tasks for the current project.
+Check active Push tasks count for the current project.
 
-This script is called by the session-start hook to prefetch active tasks
-from the Push iOS app. It caches the task list and outputs the count.
-
-The cache is used by fetch_task.py to show results immediately.
+This script is called by the session-start hook to show the user
+how many active tasks they have in Push. Outputs just the count.
 
 ## Unified Hub Architecture (2026-01-16)
 
@@ -37,13 +35,10 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import Optional
 
 # Configuration
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
-CACHE_DIR = Path.home() / ".config" / "push" / "cache"
-CACHE_FILE = CACHE_DIR / "tasks.json"
 
 
 def get_git_remote() -> Optional[str]:
@@ -185,17 +180,6 @@ def fetch_tasks(git_remote: str) -> list:
         raise ValueError(f"Network error: {e.reason}")
 
 
-def save_cache(tasks: list, git_remote: Optional[str] = None) -> None:
-    """Save tasks to cache file."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_data = {
-        "tasks": tasks,
-        "git_remote": git_remote,
-        "cached_at": datetime.now(timezone.utc).isoformat()
-    }
-    CACHE_FILE.write_text(json.dumps(cache_data, indent=2))
-
-
 def main():
     try:
         # Get git remote for project scoping
@@ -203,16 +187,11 @@ def main():
 
         if not git_remote:
             # Not in a git repo - can't determine which project's tasks to show
-            # Save empty cache and return 0
-            save_cache([])
             print(0)
             sys.exit(0)
 
         # Fetch tasks for this project
         tasks = fetch_tasks(git_remote)
-
-        # Cache the tasks for fetch_task.py to use
-        save_cache(tasks, git_remote)
 
         # Output count (for session-start hook)
         print(len(tasks))
