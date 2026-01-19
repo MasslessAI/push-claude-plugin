@@ -58,25 +58,40 @@ This ensures you always see the latest state from the Push app.
 
 ### CLI Options
 ```bash
-fetch_task.py [--all] [--all-projects] [--pinned] [--json] [--mark-completed ID]
-  --all             Show all active tasks for current project (default: first task only)
+fetch_task.py [TASK_NUMBER] [--all-projects] [--pinned] [--json] [--mark-completed ID]
+  TASK_NUMBER       Fetch a specific task by number (e.g., 5 or #5) - fast direct lookup
   --all-projects    Show tasks from ALL projects (not just current)
   --pinned          Only show pinned (focused) tasks
   --json            Output raw JSON format
   --mark-completed  Mark a task as completed by UUID
 ```
 
+### Direct Task Lookup (Fast Path)
+
+When the user specifies a task number directly (e.g., `/push-todo 5` or `/push-todo #427`):
+
+1. **Script fetches immediately** - No project filtering, no list scanning
+2. **API call goes directly** - Uses `?display_number=N` query param
+3. **Returns single task** - Ready to work on instantly
+
+This is the fastest path - use it when the user knows their task number.
+
 ## Fetching Tasks
 
 When the user wants to see their tasks, run:
 
 ```bash
+# Fetch all tasks for current project
 python3 ~/.claude/skills/push-todo/scripts/fetch_task.py
+
+# Fetch a specific task by number (fast direct lookup)
+python3 ~/.claude/skills/push-todo/scripts/fetch_task.py 427
+python3 ~/.claude/skills/push-todo/scripts/fetch_task.py "#427"
 ```
 
 Note: The script reads the API key from `~/.config/push/config` automatically.
 
-This returns a list of active tasks. Present them using the **global display number** (same as shown in the Push app):
+This returns all active tasks for the current project. Present them using the **global display number** (same as shown in the Push app):
 
 ```
 You have N active tasks from Push:
@@ -87,7 +102,7 @@ You have N active tasks from Push:
 #351 **[Summary]**
    Details: ...
 
-Which task would you like to work on? (Use #N to reference)
+Which task would you like to work on? (Use #N to reference, e.g., /push-todo 427)
 ```
 
 **IMPORTANT:** Always reference tasks by their global number (`#427`, `#351`, etc.), never by relative position (1st, 2nd). This ensures consistency between the Push app and Claude Code.

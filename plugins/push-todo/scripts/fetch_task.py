@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fetch and display active Push tasks.
-Version: 4.0.0 (no cache - always fresh)
+Version: 4.1.0 (direct task number lookup)
 
 This script retrieves active tasks from the Push iOS app and outputs them
 in a format suitable for Claude Code to process.
@@ -22,14 +22,15 @@ By default, only tasks for the CURRENT PROJECT are shown (based on git remote).
 Use --all-projects to see tasks from all projects.
 
 Usage:
-    python fetch_task.py [--all] [--all-projects] [--pinned] [--mark-completed TASK_ID]
+    python fetch_task.py [TASK_NUMBER] [--all-projects] [--pinned] [--mark-completed TASK_ID]
+
+Arguments:
+    TASK_NUMBER        Optional task number to fetch directly (e.g., 5 or #5)
 
 Options:
-    --all              Fetch all active tasks for current project (default: first task only)
     --all-projects     Fetch tasks from ALL projects (not just current)
     --pinned           Only show pinned (focused) tasks, or prioritize them at the top
     --mark-completed ID Mark a task as completed (syncs back to Push)
-    --refresh          Force refresh from database (updates cache)
     --json             Output raw JSON
 
 Environment:
@@ -238,6 +239,54 @@ def get_tasks(git_remote: Optional[str] = None) -> List:
     return fetch_tasks_from_api(git_remote)
 
 
+def fetch_task_by_number(display_number: int) -> Optional[dict]:
+    """
+    Fetch a specific task by its display number (direct lookup).
+
+    This is the fast path - goes directly to the API with display_number
+    query param, bypassing project filtering.
+
+    Args:
+        display_number: The global task number (e.g., 427)
+
+    Returns:
+        Task dict if found, None if not found.
+    """
+    api_key = get_api_key()
+    url = f"{API_BASE_URL}/synced-todos?display_number={display_number}"
+
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode())
+            todos = data.get("todos", [])
+            if not todos:
+                return None
+            t = todos[0]
+            return {
+                "id": t.get("id"),
+                "display_number": t.get("displayNumber"),
+                "summary": t.get("summary") or t.get("title", "No summary"),
+                "content": t.get("normalizedContent") or t.get("summary") or "",
+                "transcript": t.get("originalTranscript"),
+                "project_hint": None,
+                "git_remote": None,
+                "is_focused": t.get("isFocused", False),
+                "created_at": t.get("createdAt"),
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise ValueError("Invalid API key. Run 'push setup' to configure.")
+        if e.code == 404:
+            return None
+        raise
+    except urllib.error.URLError as e:
+        raise ValueError(f"Network error: {e.reason}")
+
+
 def mark_task_completed(task_id: str) -> bool:
     """
     Mark a task as completed using the todo-status endpoint.
@@ -304,13 +353,30 @@ def format_task_for_display(task: dict) -> str:
     return "\n".join(lines)
 
 
+def parse_task_number(value: str) -> Optional[int]:
+    """
+    Parse task number from string, handling both '5' and '#5' formats.
+
+    Returns:
+        The integer task number, or None if not a valid format.
+    """
+    if not value:
+        return None
+    # Strip leading '#' if present
+    cleaned = value.lstrip("#")
+    try:
+        num = int(cleaned)
+        return num if num > 0 else None
+    except ValueError:
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fetch active Push tasks")
-    parser.add_argument("--all", action="store_true", help="Fetch all active tasks for current project")
+    parser.add_argument("task_number", nargs="?", default=None, help="Task number to fetch directly (e.g., 5 or #5)")
     parser.add_argument("--all-projects", action="store_true", help="Fetch tasks from ALL projects (not just current)")
     parser.add_argument("--pinned", action="store_true", help="Only show pinned tasks, or prioritize them at the top")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
-    parser.add_argument("--refresh", action="store_true", help="(deprecated, no-op) Always fetches fresh")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     args = parser.parse_args()
 
@@ -324,6 +390,25 @@ def main():
                 print(f"Failed to mark task {args.mark_completed} as completed", file=sys.stderr)
                 sys.exit(1)
             return
+
+        # Handle direct task number lookup (fast path)
+        if args.task_number:
+            display_num = parse_task_number(args.task_number)
+            if display_num is None:
+                print(f"Invalid task number: {args.task_number}", file=sys.stderr)
+                sys.exit(1)
+
+            task = fetch_task_by_number(display_num)
+            if not task:
+                print(f"Task #{display_num} not found (may be completed or deleted).")
+                sys.exit(0)
+
+            if args.json:
+                print(json.dumps({"tasks": [task]}, indent=2))
+            else:
+                print(f"# Task #{display_num} from Push\n")
+                print(format_task_for_display(task))
+            sys.exit(0)
 
         # Determine project filter
         # By default, scope to current project (git remote)
@@ -366,7 +451,8 @@ def main():
         # Output - always use global display_number (#N format)
         if args.json:
             print(json.dumps({"tasks": tasks}, indent=2))
-        elif args.all:
+        else:
+            # Show all tasks for current project (default behavior)
             scope = "this project" if git_remote else "all projects"
             pinned_suffix = ", pinned only" if args.pinned else ""
             print(f"# {len(tasks)} Active Tasks ({scope}{pinned_suffix})\n")
@@ -375,12 +461,6 @@ def main():
                 print(f"---\n### #{display_num}\n")
                 print(format_task_for_display(task))
                 print()
-        else:
-            # Just the first task
-            task = tasks[0]
-            display_num = task.get("display_number")
-            print(f"# Task #{display_num} from Push\n")
-            print(format_task_for_display(task))
 
         sys.exit(0)
 
