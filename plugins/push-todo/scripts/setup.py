@@ -664,8 +664,11 @@ def get_installation_method() -> str:
 
     Returns:
         "marketplace" - Installed via Claude Code marketplace (in ~/.claude/plugins/)
-        "development" - Symlinked for development
-        "legacy" - Installed via curl (files in ~/.claude/skills/, no git)
+        "development" - Symlinked for development (INTERNAL USE ONLY - not a user scenario)
+        "legacy" - Installed via curl (files in ~/.claude/skills/, no symlink/git)
+
+    Note: Real users install via marketplace or legacy curl. The "development"
+    detection is purely for plugin maintainers who use symlinks for convenience.
     """
     plugin_dir = Path(__file__).parent.parent
 

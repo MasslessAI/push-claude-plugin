@@ -278,12 +278,15 @@ Each task includes:
 
 Updates are handled via the doctor flow in `/push-todo setup`.
 
+### User Installation Types
+
 | Installation Type | Update Method | Doctor Flow Behavior |
 |-------------------|---------------|---------------------|
 | **Marketplace (auto-update ON)** | Automatic | Skips silently |
 | **Marketplace (auto-update OFF)** | `claude plugin update push-todo@push-claude-plugin` | Shows command + hint to enable auto-update |
-| **Development** | `git pull` | Skips silently |
 | **Legacy (curl)** | Re-runs install script | Runs automatically |
+
+> **Note:** "Development" installs (symlinks) are internal only for plugin maintainers, not a user scenario.
 
 **How we detect marketplace auto-update status:**
 The setup script reads `~/.claude/plugins/known_marketplaces.json` and checks the `autoUpdate` field for our marketplace. Third-party marketplaces default to auto-update OFF.
