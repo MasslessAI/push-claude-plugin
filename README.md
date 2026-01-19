@@ -17,72 +17,74 @@ Push is a voice-powered todo app. Capture tasks by speaking on your phone → wo
 
 ## Installation
 
-### Claude Code (Recommended)
+### Option 1: Marketplace (Recommended)
 
-Install via the Claude Code plugin marketplace for automatic updates:
+Install via the Claude Code plugin marketplace:
 
-**Step 1:** Add the Push marketplace
 ```
 /plugin marketplace add MasslessAI/push-claude-plugin
+/plugin install push-todo@push-claude-plugin
 ```
 
-**Step 2:** Install the plugin
-```
-/plugin install push-todo@MasslessAI/push-claude-plugin
-```
-
-**Step 3:** Enable auto-updates
-```
-/plugin → Marketplaces → MasslessAI/push-claude-plugin → Enable auto-update
-```
-
-**Step 4:** Connect your account
+Then run the setup:
 ```
 /push-todo setup
 ```
 
-Done! Updates will be applied automatically at startup.
+**Enable auto-updates** (important for third-party marketplaces):
+```
+/plugin → Marketplaces → push-claude-plugin → Enable auto-update
+```
 
-### Quick Install (Legacy)
+> **Note:** Third-party marketplaces have auto-update **OFF by default**. We recommend enabling it so you always have the latest features and bug fixes.
 
-For a one-liner install (does not support auto-updates):
+### Option 2: Quick Install (Legacy)
+
+For a one-liner install:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh | bash
 ```
 
 Then restart Claude Code and run `/push-todo setup` to connect your account.
 
-### OpenAI Codex CLI
-
-```bash
-curl -sL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/codex/install-codex.sh | bash
-```
-
-Then run `$push-todo setup` to connect your account.
+> **Note:** Legacy installations do not support auto-updates. Run `/push-todo setup` periodically to check for updates.
 
 ## Usage
 
 | Command | Description |
 |---------|-------------|
-| `/push-todo` | Show your pending tasks |
-| `/push-todo setup` | Connect or reconnect your Push account |
+| `/push-todo` | Show your pending tasks for current project |
+| `/push-todo setup` | **Doctor flow**: check updates, validate API key, register project |
+| `/push-todo all` | Show tasks from all projects |
+| `/push-todo #427` | Jump directly to task #427 |
+| `/push-todo review` | Review session and mark completed tasks |
 
 Or just say "show my Push tasks" and Claude will activate the skill automatically.
+
+### The Setup Command (Doctor Flow)
+
+`/push-todo setup` is a comprehensive health check that:
+
+1. **Checks for updates** - Compares local vs remote version
+2. **Validates API key** - Ensures your connection is still valid
+3. **Registers project** - Associates current project with keywords for AI routing
+
+You only need to remember this one command - it handles everything.
 
 ## Session Notifications
 
 When you start a Claude Code session, you'll see:
 
 ```
-[Push] You have 3 pending tasks from your iPhone. Say 'push-todo' to see them.
+[Push] You have 3 active tasks from your iPhone. Say 'push-todo' to see them.
 ```
 
 ## Requirements
 
 - [Push iOS app](https://pushto.do) installed on your iPhone
 - Push account (free, Sign in with Apple)
-- Claude Code or OpenAI Codex CLI
+- Claude Code
 
 ## How It Works
 
@@ -92,55 +94,20 @@ When you start a Claude Code session, you'll see:
 4. **Work**: Select a task and Claude helps you implement it
 5. **Complete**: Mark done → syncs back to your iPhone
 
-## Auto-Updates
+## Updates
 
-If installed via the marketplace (recommended), updates are **automatic**. Claude Code handles this natively — you don't need to do anything.
+### Marketplace Installs
 
-When a new version is available, you'll see:
-```
-Plugin push-todo updated: v1.2.0 → v1.2.1
-```
+| Auto-Update Setting | Behavior |
+|---------------------|----------|
+| **ON** | Claude Code updates automatically at startup |
+| **OFF** (default for third-party) | No automatic updates, no notifications |
 
-**Legacy installations** (curl) do not support auto-updates. Run `/push-todo setup` to see migration instructions.
+**Important:** Claude Code does NOT notify you about updates when auto-update is disabled. Enable auto-updates or run `/push-todo setup` to check for updates manually.
 
-## Development
+### Legacy Installs (curl)
 
-### How Updates Reach Users
-
-```
-Push code to main
-       ↓
-GitHub Actions bumps version in plugin.json
-       ↓
-User starts Claude Code (with auto-update enabled)
-       ↓
-Claude Code fetches plugin.json, sees new version
-       ↓
-Auto-downloads and installs update
-```
-
-**The version in `plugin.json` is the only signal.** When it changes, users get the update.
-
-### Version Bumping
-
-Versions follow **X.Y.Z** format with automatic bumping:
-
-| Digit | Range | Overflow Behavior |
-|-------|-------|-------------------|
-| Z (patch) | 0-9 | Resets to 0, bumps Y |
-| Y (minor) | 0-9 | Resets to 0, bumps X |
-| X (major) | 0-9 | Increments normally |
-
-Example: `1.1.9` → `1.2.0` (not `1.1.10`)
-
-**Automated via GitHub Actions**: Every push to `main` that changes plugin files automatically bumps the version.
-
-Manual bump (if needed):
-```bash
-python scripts/bump-version.py           # Bump patch
-python scripts/bump-version.py --minor   # Bump minor
-python scripts/bump-version.py --major   # Bump major
-```
+Run `/push-todo setup` to check for updates. The doctor flow will automatically update if a new version is available.
 
 ## Troubleshooting
 
@@ -153,7 +120,12 @@ python scripts/bump-version.py --major   # Bump major
 ### Tasks don't appear
 
 1. Verify config exists: `cat ~/.config/push/config`
-2. Ensure you have pending tasks in the Push app
+2. Ensure you have active (not completed) tasks in the Push app
+3. Check if tasks are assigned to this project
+
+### API key issues
+
+Run `/push-todo setup` - it will detect invalid/revoked keys and re-authenticate automatically.
 
 ## Support
 
