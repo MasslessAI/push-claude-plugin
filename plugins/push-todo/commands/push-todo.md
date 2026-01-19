@@ -24,10 +24,7 @@ When this command is invoked:
    test -f ~/.config/push/config && echo "configured" || echo "not configured"
    ```
 
-2. **If not configured**: Run the setup flow:
-   ```bash
-   python3 ~/.claude/skills/push-todo/scripts/setup.py
-   ```
+2. **If not configured**: Run the setup flow (see [Setup Mode](#setup-mode) below)
 
 3. **If configured**: Fetch tasks:
    ```bash
@@ -98,6 +95,91 @@ python3 ~/.claude/skills/push-todo/scripts/fetch_task.py --mark-completed TASK_U
 **Session context is primary** - don't grep the entire codebase for every task. Use conversation history to identify what was actually worked on, then match against tasks semantically. This catches both:
 - Explicit: User said "work on #701" but forgot to mark complete
 - Implicit: User fixed something that matches a task they didn't mention
+
+## Setup Mode
+
+When `/push-todo setup` is invoked, generate project-specific keywords BEFORE running the setup script.
+
+### Why Keywords Matter
+
+Keywords help the AI route voice todos to the correct project. Generic keywords like "coding" or "programming" don't differentiate between projects. We need UNIQUE keywords that identify THIS specific project.
+
+### Step 1: Understand the Project
+
+Read the project context to generate meaningful keywords:
+
+1. **Check for CLAUDE.md**:
+   ```bash
+   test -f CLAUDE.md && echo "found" || echo "not found"
+   ```
+
+2. **If CLAUDE.md exists**, read the header section:
+   ```bash
+   head -80 CLAUDE.md
+   ```
+
+3. **If no CLAUDE.md**, check for README.md:
+   ```bash
+   test -f README.md && head -50 README.md
+   ```
+
+### Step 2: Generate Unique Keywords
+
+Based on the project context, generate 5-10 keywords.
+
+**MUST include:**
+- Project name and common nicknames users would say
+- Domain-specific terms (e.g., "voice todo" for a voice app)
+- Distinctive tech if relevant (e.g., "whisper" for speech recognition)
+
+**MUST NOT include (these are useless for differentiation):**
+- Generic terms: "coding", "programming", "development"
+- Tool terms: "mac", "terminal", "cli", "ai", "task"
+- Any term that applies to ALL code projects
+
+**Think:** "What would the user SAY when creating a task for THIS project?"
+
+### Step 3: Generate Description
+
+Generate a short (5-15 words) description that captures what makes this project unique. NOT generic like "coding tasks" or "development work".
+
+### Step 4: Run Setup with Keywords
+
+```bash
+python3 ~/.claude/skills/push-todo/scripts/setup.py \
+  --keywords "keyword1,keyword2,keyword3,..." \
+  --description "Short unique description of this project"
+```
+
+### Examples
+
+**For a voice todo app (Push):**
+```bash
+python3 ~/.claude/skills/push-todo/scripts/setup.py \
+  --keywords "push,voice,todo,whisper,ios,swiftui,recording,speech,transcription" \
+  --description "Voice-powered todo app for iOS with whisper speech recognition"
+```
+
+**For a web scraping project:**
+```bash
+python3 ~/.claude/skills/push-todo/scripts/setup.py \
+  --keywords "scraper,crawler,beautifulsoup,selenium,extraction,parsing" \
+  --description "Web scraping tool for data extraction"
+```
+
+**For a game engine:**
+```bash
+python3 ~/.claude/skills/push-todo/scripts/setup.py \
+  --keywords "engine,graphics,rendering,physics,ecs,vulkan,gamedev" \
+  --description "Custom game engine with Vulkan renderer"
+```
+
+### Fallback (No Documentation)
+
+If no CLAUDE.md or README.md exists, generate minimal keywords from:
+- Folder name
+- Git repo name
+- Primary file extensions (`.swift` → iOS, `.py` → Python, `.rs` → Rust)
 
 ## What is Push?
 
