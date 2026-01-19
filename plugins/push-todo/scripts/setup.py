@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-Smart setup for Push integration.
+Smart setup for Push integration (Doctor Mode).
 
-This script handles both initial authentication AND project registration:
-- First time: Opens browser for Sign in with Apple, saves credentials
-- Subsequent: Uses existing credentials for instant project registration
+This script is a comprehensive health check and setup tool:
+- Version check: Compare local vs remote plugin version
+- API validation: Verify API key is still valid
+- Project registration: Register current project with keywords
+- Authentication: Handle initial auth or re-auth when needed
 
 Usage:
-    python setup.py                      # Default: Claude Code
-    python setup.py --client claude-code # Explicit: Claude Code
-    python setup.py --client openai-codex # For OpenAI Codex
+    python setup.py                      # Full doctor flow
+    python setup.py --check-version      # Check for updates only
+    python setup.py --update             # Update to latest version
+    python setup.py --validate-key       # Validate API key only
+    python setup.py --client claude-code # Explicit client type
     python setup.py --reauth             # Force re-authentication
 
 See: /docs/20260114_cli_action_auto_creation_implementation_plan.md
@@ -33,6 +37,10 @@ API_BASE = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4dXpxY2JxaGlheG1maXR6eGxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU2OTY5MzQsImV4cCI6MjA1MTI3MjkzNH0.4Nm5_ABkgJCrrFc-bVzbx8qAp-SQo92HKziH7TBgspo"
 CONFIG_DIR = os.path.expanduser("~/.config/push")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config")
+
+# Plugin version checking
+REMOTE_PLUGIN_JSON_URL = "https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/plugins/push-todo/.claude-plugin/plugin.json"
+INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh"
 
 
 class SlowDownError(Exception):
@@ -92,6 +100,211 @@ def clear_config():
             os.remove(CONFIG_FILE)
         except Exception:
             pass
+
+
+# ============================================================================
+# VERSION CHECKING & UPDATE
+# ============================================================================
+
+def get_local_version() -> Optional[str]:
+    """Get the local plugin version from plugin.json."""
+    plugin_dir = Path(__file__).parent.parent
+    plugin_json = plugin_dir / ".claude-plugin" / "plugin.json"
+
+    if not plugin_json.exists():
+        return None
+
+    try:
+        with open(plugin_json) as f:
+            data = json.load(f)
+            return data.get("version")
+    except Exception:
+        return None
+
+
+def get_remote_version() -> Optional[str]:
+    """Fetch the remote plugin version from GitHub."""
+    try:
+        req = urllib.request.Request(
+            REMOTE_PLUGIN_JSON_URL,
+            headers={"User-Agent": "push-cli/1.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            return data.get("version")
+    except Exception:
+        return None
+
+
+def parse_version(version_str: str) -> tuple:
+    """Parse version string into comparable tuple."""
+    try:
+        parts = version_str.split(".")
+        return tuple(int(p) for p in parts)
+    except (ValueError, AttributeError):
+        return (0, 0, 0)
+
+
+def check_version() -> dict:
+    """
+    Check if an update is available.
+
+    Returns dict with:
+        - status: "up_to_date", "update_available", "unknown"
+        - local_version: Current local version
+        - remote_version: Latest remote version
+        - message: Human-readable message
+    """
+    local = get_local_version()
+    remote = get_remote_version()
+
+    if not local:
+        return {
+            "status": "unknown",
+            "local_version": None,
+            "remote_version": remote,
+            "message": "Could not determine local version"
+        }
+
+    if not remote:
+        return {
+            "status": "unknown",
+            "local_version": local,
+            "remote_version": None,
+            "message": "Could not fetch remote version (network error)"
+        }
+
+    local_tuple = parse_version(local)
+    remote_tuple = parse_version(remote)
+
+    if remote_tuple > local_tuple:
+        return {
+            "status": "update_available",
+            "local_version": local,
+            "remote_version": remote,
+            "message": f"Update available: {local} → {remote}"
+        }
+
+    return {
+        "status": "up_to_date",
+        "local_version": local,
+        "remote_version": remote,
+        "message": f"Plugin is up to date (v{local})"
+    }
+
+
+def do_update() -> dict:
+    """
+    Update the plugin by re-running the install script.
+
+    Returns dict with:
+        - status: "success", "failed", "skipped"
+        - message: Human-readable message
+    """
+    method = get_installation_method()
+
+    if method == "marketplace":
+        return {
+            "status": "skipped",
+            "message": "Marketplace installation - updates are automatic"
+        }
+
+    if method == "development":
+        return {
+            "status": "skipped",
+            "message": "Development installation - use git pull instead"
+        }
+
+    # Legacy installation - run curl installer
+    try:
+        result = subprocess.run(
+            ["bash", "-c", f"curl -fsSL {INSTALL_SCRIPT_URL} | bash"],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if result.returncode == 0:
+            return {
+                "status": "success",
+                "message": "Plugin updated successfully"
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": f"Update failed: {result.stderr or 'Unknown error'}"
+            }
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "failed",
+            "message": "Update timed out"
+        }
+    except Exception as e:
+        return {
+            "status": "failed",
+            "message": f"Update failed: {e}"
+        }
+
+
+# ============================================================================
+# API KEY VALIDATION
+# ============================================================================
+
+def validate_api_key(api_key: str) -> dict:
+    """
+    Validate an API key with the backend.
+
+    This makes a lightweight request to check if the key is still valid.
+
+    Returns dict with:
+        - status: "valid", "invalid", "revoked", "error"
+        - message: Human-readable message
+        - email: User's email (if valid)
+    """
+    # Use synced-todos endpoint with a minimal request to validate key
+    # This is a read-only endpoint that returns quickly
+    req = urllib.request.Request(
+        f"{API_BASE}/synced-todos?limit=0",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            # If we get here, the key is valid
+            return {
+                "status": "valid",
+                "message": "API key is valid",
+                "email": get_existing_email()
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return {
+                "status": "invalid",
+                "message": "API key is invalid or revoked"
+            }
+        elif e.code == 403:
+            return {
+                "status": "revoked",
+                "message": "API key has been revoked"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Server error: {e.code}"
+            }
+    except urllib.error.URLError as e:
+        return {
+            "status": "error",
+            "message": f"Network error: {e.reason}"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Validation failed: {e}"
+        }
 
 
 # ============================================================================
@@ -489,7 +702,7 @@ def show_migration_hint():
 
 def main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Setup Push integration")
+    parser = argparse.ArgumentParser(description="Setup Push integration (Doctor Mode)")
     parser.add_argument(
         "--client",
         choices=["claude-code", "openai-codex"],
@@ -507,6 +720,21 @@ def main():
         help="Show current connection status without registering"
     )
     parser.add_argument(
+        "--check-version",
+        action="store_true",
+        help="Check for plugin updates (JSON output)"
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Update plugin to latest version"
+    )
+    parser.add_argument(
+        "--validate-key",
+        action="store_true",
+        help="Validate API key with backend (JSON output)"
+    )
+    parser.add_argument(
         "--keywords",
         type=str,
         default="",
@@ -519,6 +747,31 @@ def main():
         help="Short description of the project (generated by agent)"
     )
     args = parser.parse_args()
+
+    # Handle --check-version flag (JSON output for agent parsing)
+    if args.check_version:
+        result = check_version()
+        print(json.dumps(result, indent=2))
+        return
+
+    # Handle --update flag
+    if args.update:
+        result = do_update()
+        print(json.dumps(result, indent=2))
+        return
+
+    # Handle --validate-key flag (JSON output for agent parsing)
+    if args.validate_key:
+        existing_key = get_existing_key()
+        if not existing_key:
+            print(json.dumps({
+                "status": "missing",
+                "message": "No API key configured"
+            }, indent=2))
+            return
+        result = validate_api_key(existing_key)
+        print(json.dumps(result, indent=2))
+        return
 
     # Handle --status flag (show status and exit)
     if args.status:

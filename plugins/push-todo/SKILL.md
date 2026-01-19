@@ -155,36 +155,79 @@ When the user runs `/push-todo review`, use **session context** to find complete
 - User said "work on #701" but forgot to mark complete
 - User fixed something that matches a task they didn't mention
 
-## Setup Mode
+## Setup Mode (Doctor Flow)
 
-When `/push-todo setup` is invoked or API key is missing:
+When `/push-todo setup` is invoked, run a comprehensive health check. This is the ONE command users need to run - it handles everything.
 
-### First-Time Setup (No API Key)
+### Full Doctor Flow
 
-1. Run the setup script without arguments:
+Execute these steps **in order**. Stop early if a critical issue needs user action.
+
+#### Step 1: Check Plugin Version
+
+```bash
+python3 ~/.claude/skills/push-todo/scripts/setup.py --check-version
+```
+
+**JSON Response:**
+```json
+{
+  "status": "up_to_date" | "update_available" | "unknown",
+  "local_version": "1.2.6",
+  "remote_version": "1.3.0",
+  "message": "Update available: 1.2.6 → 1.3.0"
+}
+```
+
+**If `update_available`:**
+1. Tell the user: "A new version of the Push plugin is available (1.2.6 → 1.3.0). Would you like me to update?"
+2. **Wait for user confirmation** (semantic response like "yes", "sure", "go ahead")
+3. If confirmed, run update:
+   ```bash
+   python3 ~/.claude/skills/push-todo/scripts/setup.py --update
+   ```
+4. Continue regardless of update result (warn if failed)
+
+**If `up_to_date` or `unknown`:** Continue silently.
+
+#### Step 2: Validate API Key
+
+```bash
+python3 ~/.claude/skills/push-todo/scripts/setup.py --validate-key
+```
+
+**JSON Response:**
+```json
+{
+  "status": "valid" | "invalid" | "revoked" | "missing" | "error",
+  "message": "API key is valid",
+  "email": "user@example.com"
+}
+```
+
+**If `missing` or `invalid` or `revoked`:**
+1. Tell the user: "Your Push connection needs to be set up. I'll open a browser for Sign in with Apple."
+2. Run full setup (opens browser):
    ```bash
    python3 ~/.claude/skills/push-todo/scripts/setup.py
    ```
+3. After auth completes, continue to Step 3.
 
-2. This opens a browser for Sign in with Apple authentication
+**If `valid`:** Continue to Step 3 with existing credentials.
 
-3. Once complete, the API key is automatically saved
+**If `error`:** Warn user about network issue, but continue.
 
-### Project Registration (API Key Exists)
-
-When the user runs `/push-todo setup` in a project that's already authenticated:
+#### Step 3: Register Project with Keywords
 
 1. **Read CLAUDE.md** to understand the project context
 
-2. **Generate keywords** - Extract 5-15 relevant keywords from CLAUDE.md:
+2. **Generate keywords** - Extract 5-15 relevant keywords:
    - Project name and aliases
    - Key technologies (e.g., "swift", "swiftui", "supabase")
    - Domain terms (e.g., "voice", "todo", "sync")
    - Keep keywords lowercase, comma-separated
 
-3. **Generate description** - Create a concise 1-sentence description:
-   - What the project does
-   - Keep under 100 characters
+3. **Generate description** - Concise 1-sentence (<100 chars)
 
 4. **Run setup with generated values**:
    ```bash
@@ -200,7 +243,13 @@ python3 ~/.claude/skills/push-todo/scripts/setup.py \
   --description "Voice-powered todo app for iOS with realtime sync"
 ```
 
-**Why keywords matter:** These keywords help the AI match voice tasks to the correct project. When a user says "add dark mode to Push", the AI uses keywords to route the task to the right action.
+### Why This Matters
+
+- **Version check:** Ensures users have latest bug fixes
+- **API validation:** Catches revoked keys before tasks fail
+- **Keywords:** Help AI route voice tasks to the correct project
+
+Users only need to remember one command: `/push-todo setup`
 
 ## Task Fields
 
@@ -219,25 +268,22 @@ Each task includes:
 
 **Pinned Tasks:** Tasks marked as pinned in the Push app will appear with a 📌 indicator and are automatically sorted to the top of the list. Use `--pinned` to filter to only pinned tasks.
 
-## Auto-Updates
+## Updates
 
-The plugin auto-updates by default at each session start:
+Updates are handled via the doctor flow in `/push-todo setup`.
 
-| Behavior | When |
-|----------|------|
-| Silent | Plugin is up-to-date |
-| Auto-update | Newer version available (default behavior) |
-| Manual prompt | Auto-update failed (e.g., local changes) |
+| Installation Type | Update Method |
+|-------------------|---------------|
+| **Marketplace** | Automatic (Claude Code handles it) |
+| **Development** | Use `git pull` |
+| **Legacy (curl)** | Via `--update` flag in setup |
 
-**Telemetry output:**
-```
-[Push] Plugin updated: v1.1.0 → v1.2.0      # Auto-update succeeded
-[Push] Update available: v1.1.0 → v1.2.0    # Manual update needed
-```
+The doctor flow checks for updates and prompts the user for confirmation before updating.
 
-**Disable auto-updates (opt-out):**
+**Manual update check:**
 ```bash
-export PUSH_PLUGIN_AUTO_UPDATE=false
+python3 ~/.claude/skills/push-todo/scripts/setup.py --check-version
+python3 ~/.claude/skills/push-todo/scripts/setup.py --update
 ```
 
 ## Error Handling
