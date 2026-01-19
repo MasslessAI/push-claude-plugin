@@ -39,8 +39,8 @@ CONFIG_DIR = os.path.expanduser("~/.config/push")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config")
 
 # Plugin version checking
-REMOTE_PLUGIN_JSON_URL = "https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/plugins/push-todo/.claude-plugin/plugin.json"
-INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh"
+REMOTE_PLUGIN_JSON_URL = "https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/plugins/push-todo/.claude-plugin/plugin.json"
+INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/install.sh"
 
 
 class SlowDownError(Exception):
@@ -221,9 +221,9 @@ def do_update() -> dict:
             return {
                 "status": "manual_required",
                 "message": "Marketplace auto-update is disabled - run update command in Claude Code",
-                "command": "claude plugin update push-todo@push-claude-plugin",
+                "command": "claude plugin update push-todo@push-todo-cli",
                 "auto_update_enabled": False,
-                "hint": "To enable auto-updates: /plugin → Marketplaces → push-claude-plugin → Enable auto-update"
+                "hint": "To enable auto-updates: /plugin → Marketplaces → push-todo-cli → Enable auto-update"
             }
 
     if method == "development":
@@ -715,7 +715,7 @@ def is_marketplace_auto_update_enabled() -> Optional[bool]:
             data = json.load(f)
 
         # Our marketplace ID
-        marketplace_id = "push-claude-plugin"
+        marketplace_id = "push-todo-cli"
 
         if marketplace_id not in data:
             return None
@@ -746,10 +746,10 @@ def show_migration_hint():
         print("    rm -rf ~/.claude/skills/push-todo")
         print()
         print("  Step 2: Add marketplace")
-        print("    /plugin marketplace add MasslessAI/push-claude-plugin")
+        print("    /plugin marketplace add MasslessAI/push-todo-cli")
         print()
         print("  Step 3: Install plugin")
-        print("    /plugin install push-todo@MasslessAI/push-claude-plugin")
+        print("    /plugin install push-todo@push-todo-cli")
         print()
         print("  Step 4: Enable auto-updates")
         print("    /plugin -> Marketplaces -> Enable auto-update")

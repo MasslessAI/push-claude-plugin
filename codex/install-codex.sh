@@ -13,7 +13,7 @@ AGENTS_FILE="$CODEX_DIR/AGENTS.md"
 mkdir -p "$SKILLS_DIR/scripts"
 
 # Download files from GitHub
-BASE_URL="https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main"
+BASE_URL="https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main"
 
 echo "Downloading skill files..."
 curl -sL "$BASE_URL/codex/SKILL.md" > "$SKILLS_DIR/SKILL.md"

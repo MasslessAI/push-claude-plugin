@@ -1,6 +1,6 @@
 # Push Voice Tasks
 
-[![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blue)](https://github.com/MasslessAI/push-claude-plugin)
+[![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blue)](https://github.com/MasslessAI/push-todo-cli)
 
 Capture coding tasks by voice on your iPhone → work on them in Claude Code.
 
@@ -11,7 +11,7 @@ Capture coding tasks by voice on your iPhone → work on them in Claude Code.
 ### Option A: Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/install.sh | bash
 ```
 
 Then restart Claude Code and run `/push-todo setup`.
@@ -21,12 +21,12 @@ Then restart Claude Code and run `/push-todo setup`.
 If you prefer to run the commands yourself:
 
 ```
-/plugin marketplace add MasslessAI/push-claude-plugin
-/plugin install push-todo@push-claude-plugin
+/plugin marketplace add MasslessAI/push-todo-cli
+/plugin install push-todo@push-todo-cli
 /push-todo setup
 ```
 
-> **Tip:** Enable auto-updates via `/plugin` → Marketplaces → push-claude-plugin → Enable auto-update
+> **Tip:** Enable auto-updates via `/plugin` → Marketplaces → push-todo-cli → Enable auto-update
 
 ---
 
@@ -62,7 +62,7 @@ Both install methods use the marketplace, so updates work the same way:
 | **Auto-update ON** | Automatic at startup |
 | **Auto-update OFF** | Run `/push-todo setup` to check |
 
-Enable auto-updates: `/plugin` → Marketplaces → push-claude-plugin → Enable auto-update
+Enable auto-updates: `/plugin` → Marketplaces → push-todo-cli → Enable auto-update
 
 The `/push-todo setup` command handles everything: checks for updates, validates your connection, and registers your project.
 
@@ -96,7 +96,7 @@ This will:
 ## Support
 
 - Website: [pushto.do](https://pushto.do)
-- Issues: [GitHub](https://github.com/MasslessAI/push-claude-plugin/issues)
+- Issues: [GitHub](https://github.com/MasslessAI/push-todo-cli/issues)
 
 ---
 

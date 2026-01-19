@@ -20,11 +20,11 @@ fi
 
 # Add marketplace
 echo "Adding Push marketplace..."
-claude plugin marketplace add MasslessAI/push-claude-plugin 2>/dev/null || true
+claude plugin marketplace add MasslessAI/push-todo-cli 2>/dev/null || true
 
 # Install plugin
 echo "Installing push-todo plugin..."
-claude plugin install push-todo@push-claude-plugin
+claude plugin install push-todo@push-todo-cli
 
 echo ""
 echo "Installation complete!"

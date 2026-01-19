@@ -1,5 +1,5 @@
 {
-  "name": "push-claude-plugin",
+  "name": "push-todo-cli",
   "description": "Voice tasks from Push iOS app",
   "owner": {
     "name": "MasslessAI",

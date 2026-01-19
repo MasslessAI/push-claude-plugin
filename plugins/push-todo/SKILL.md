@@ -308,7 +308,7 @@ Both curl and marketplace install use the same plugin system, so updates work id
 | Setting | Update Method | Doctor Flow Behavior |
 |---------|---------------|---------------------|
 | **Auto-update ON** | Automatic at startup | Skips silently |
-| **Auto-update OFF** | `claude plugin update push-todo@push-claude-plugin` | Shows command + hint to enable auto-update |
+| **Auto-update OFF** | `claude plugin update push-todo@push-todo-cli` | Shows command + hint to enable auto-update |
 
 > **Note:** "Development" installs (symlinks) are internal only for plugin maintainers, not a user scenario.
 
