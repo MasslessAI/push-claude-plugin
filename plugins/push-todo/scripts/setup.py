@@ -205,13 +205,26 @@ def do_update() -> dict:
     method = get_installation_method()
 
     if method == "marketplace":
-        # Claude Code marketplace - we can't update programmatically
-        # User must run update command themselves (auto-update may be disabled)
-        return {
-            "status": "manual_required",
-            "message": "Marketplace installation - run update command in Claude Code",
-            "command": "claude plugin update push-todo"
-        }
+        # Claude Code marketplace - check if auto-update is enabled
+        auto_update = is_marketplace_auto_update_enabled()
+
+        if auto_update is True:
+            # Auto-update is ON - Claude Code handles updates automatically
+            return {
+                "status": "skipped",
+                "message": "Marketplace auto-update is enabled - Claude Code handles updates automatically",
+                "auto_update_enabled": True
+            }
+        else:
+            # Auto-update is OFF or unknown (defaults to OFF for third-party)
+            # User must run update command themselves
+            return {
+                "status": "manual_required",
+                "message": "Marketplace auto-update is disabled - run update command in Claude Code",
+                "command": "claude plugin update push-todo@push-claude-plugin",
+                "auto_update_enabled": False,
+                "hint": "To enable auto-updates: /plugin → Marketplaces → push-claude-plugin → Enable auto-update"
+            }
 
     if method == "development":
         return {
@@ -673,6 +686,48 @@ def get_installation_method() -> str:
 
     # Otherwise it's a legacy curl installation
     return "legacy"
+
+
+def is_marketplace_auto_update_enabled() -> Optional[bool]:
+    """
+    Check if auto-update is enabled for our marketplace in Claude Code.
+
+    Reads ~/.claude/plugins/known_marketplaces.json to check the autoUpdate field.
+
+    Returns:
+        True - Auto-update is explicitly enabled
+        False - Auto-update is explicitly disabled
+        None - Cannot determine (file missing, marketplace not found, or field absent)
+
+    Note: For official marketplaces, autoUpdate defaults to True.
+          For third-party marketplaces, autoUpdate defaults to False.
+    """
+    known_marketplaces_file = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
+
+    if not known_marketplaces_file.exists():
+        return None
+
+    try:
+        with open(known_marketplaces_file) as f:
+            data = json.load(f)
+
+        # Our marketplace ID
+        marketplace_id = "push-claude-plugin"
+
+        if marketplace_id not in data:
+            return None
+
+        marketplace_info = data[marketplace_id]
+
+        # autoUpdate field may or may not be present
+        if "autoUpdate" in marketplace_info:
+            return marketplace_info["autoUpdate"]
+
+        # Field not present - return None (caller decides based on defaults)
+        return None
+
+    except Exception:
+        return None
 
 
 def show_migration_hint():

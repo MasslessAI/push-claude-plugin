@@ -188,9 +188,9 @@ python3 ~/.claude/skills/push-todo/scripts/setup.py --check-version
    ```
 4. Handle update result:
    - `"status": "success"` → Continue to Step 2
-   - `"status": "manual_required"` → Tell user to run the command in `"command"` field (e.g., `claude plugin update push-todo`), then continue
+   - `"status": "manual_required"` → Tell user to run the command in `"command"` field, also mention the `"hint"` for enabling auto-updates, then continue
    - `"status": "failed"` → Warn user, but continue
-   - `"status": "skipped"` → Continue silently (development installs)
+   - `"status": "skipped"` → Continue silently (marketplace with auto-update ON, or development installs)
 
 **If `up_to_date` or `unknown`:** Continue silently.
 
@@ -276,14 +276,17 @@ Each task includes:
 
 Updates are handled via the doctor flow in `/push-todo setup`.
 
-| Installation Type | Update Method |
-|-------------------|---------------|
-| **Marketplace (auto-update ON)** | Automatic (Claude Code handles it) |
-| **Marketplace (auto-update OFF)** | `claude plugin update push-todo` |
-| **Development** | Use `git pull` |
-| **Legacy (curl)** | Via `--update` flag in setup |
+| Installation Type | Update Method | Doctor Flow Behavior |
+|-------------------|---------------|---------------------|
+| **Marketplace (auto-update ON)** | Automatic | Skips silently |
+| **Marketplace (auto-update OFF)** | `claude plugin update push-todo@push-claude-plugin` | Shows command + hint to enable auto-update |
+| **Development** | `git pull` | Skips silently |
+| **Legacy (curl)** | Re-runs install script | Runs automatically |
 
-**Important:** Claude Code does NOT notify users about updates when auto-update is disabled. The doctor flow in `/push-todo setup` fills this gap by checking versions and guiding users to update.
+**How we detect marketplace auto-update status:**
+The setup script reads `~/.claude/plugins/known_marketplaces.json` and checks the `autoUpdate` field for our marketplace. Third-party marketplaces default to auto-update OFF.
+
+**Important:** Claude Code does NOT notify users about updates when auto-update is disabled. The doctor flow fills this gap by checking versions and guiding users to update.
 
 **Manual update check:**
 ```bash
