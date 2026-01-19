@@ -58,11 +58,12 @@ This ensures you always see the latest state from the Push app.
 
 ### CLI Options
 ```bash
-fetch_task.py [--all] [--all-projects] [--pinned] [--json]
-  --all           Show all active tasks for current project (default: first task only)
-  --all-projects  Show tasks from ALL projects (not just current)
-  --pinned        Only show pinned (focused) tasks
-  --json          Output raw JSON format
+fetch_task.py [--all] [--all-projects] [--pinned] [--json] [--mark-completed ID]
+  --all             Show all active tasks for current project (default: first task only)
+  --all-projects    Show tasks from ALL projects (not just current)
+  --pinned          Only show pinned (focused) tasks
+  --json            Output raw JSON format
+  --mark-completed  Mark a task as completed by UUID
 ```
 
 ## Fetching Tasks
@@ -114,6 +115,30 @@ python3 ~/.claude/skills/push-todo/scripts/fetch_task.py --mark-completed TASK_I
 ```
 
 Confirm to the user: "Task marked as complete in Push"
+
+## Reviewing Tasks
+
+When the user runs `/push-todo review`, use **session context** to find completed tasks:
+
+1. **Analyze session context** - Recall what was worked on:
+   - Explicitly mentioned tasks (e.g., "work on #701")
+   - Features implemented or bugs fixed
+   - Files edited and why
+
+2. **Fetch pending tasks** with `--all --json` flag
+
+3. **Match session work against tasks**:
+   - **Explicit**: Task number was mentioned → mark complete
+   - **Implicit**: Work done matches task content semantically → suggest completion
+   - **No match**: Skip (don't search codebase unnecessarily)
+
+4. **Present findings** - Show explicit and implicit matches
+
+5. **Mark confirmed tasks** using `--mark-completed`
+
+**Key insight**: Session context is primary. Don't grep the codebase for every task - use conversation history to identify what was actually worked on. This catches both:
+- User said "work on #701" but forgot to mark complete
+- User fixed something that matches a task they didn't mention
 
 ## Setup Mode
 
