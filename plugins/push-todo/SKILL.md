@@ -151,27 +151,34 @@ Confirm to the user: "Task #N marked complete in Push"
 
 ## Reviewing Tasks
 
-When the user runs `/push-todo review`, use **session context** to find completed tasks:
+When the user runs `/push-todo review`, check recent git activity against active tasks:
 
-1. **Analyze session context** - Recall what was worked on:
-   - Explicitly mentioned tasks (e.g., "work on #701")
-   - Features implemented or bugs fixed
-   - Files edited and why
+1. **Get recent git activity** (run in parallel):
+   ```bash
+   git log --oneline -5                  # Recent commits
+   git diff --name-only HEAD             # Uncommitted changes
+   ```
 
-2. **Fetch pending tasks** with `--all --json` flag
+2. **Fetch active tasks**:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" --json
+   ```
 
-3. **Match session work against tasks**:
-   - **Explicit**: Task number was mentioned → mark complete
-   - **Implicit**: Work done matches task content semantically → suggest completion
-   - **No match**: Skip (don't search codebase unnecessarily)
+3. **Match semantically** - Compare commit messages and changed files against task summaries. Look for obvious matches only.
 
-4. **Present findings** - Show explicit and implicit matches
+4. **Present findings**:
+   ```
+   Based on recent git activity, these tasks appear complete:
 
-5. **Mark confirmed tasks** using `--mark-completed`
+   #427 "Add dark mode toggle" → matches commit "Added dark mode with CSS vars"
+   #351 "Fix sync race condition" → matches uncommitted changes in SyncService.swift
 
-**Key insight**: Session context is primary. Don't grep the codebase for every task - use conversation history to identify what was actually worked on. This catches both:
-- User said "work on #701" but forgot to mark complete
-- User fixed something that matches a task they didn't mention
+   Mark these as complete? (y/n)
+   ```
+
+5. **On confirmation** - Mark each with `--mark-completed` and auto-generate completion comment from the matching commit/change.
+
+**Keep it simple:** Only match obvious semantic overlaps. Don't analyze file contents or grep the codebase - that's the main agent's job.
 
 ## Setup Mode (Doctor Flow)
 
