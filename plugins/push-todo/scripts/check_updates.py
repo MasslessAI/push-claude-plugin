@@ -3,16 +3,17 @@
 Check for push-todo plugin updates from GitHub.
 
 This script compares the local version with the remote version and
-optionally auto-updates if a newer version is available.
+auto-updates if a newer version is available (enabled by default).
 
 Usage:
-    python check_updates.py [--auto-update]
-
-Options:
-    --auto-update    Automatically pull updates if available (default: notify only)
+    python check_updates.py
 
 Environment:
-    PUSH_PLUGIN_AUTO_UPDATE: Set to "true" to enable auto-updates (default: false)
+    PUSH_PLUGIN_AUTO_UPDATE: Set to "false" to disable auto-updates (default: true)
+
+Telemetry output:
+    [Push] Plugin updated: v1.1.0 → v1.2.0     # Auto-update succeeded
+    [Push] Update available: v1.1.0 → v1.2.0   # Can't auto-update (manual needed)
 """
 
 import os
@@ -119,8 +120,9 @@ def main():
                         help="Automatically pull updates if available")
     args = parser.parse_args()
 
-    # Check environment variable for auto-update preference
-    auto_update = args.auto_update or os.environ.get("PUSH_PLUGIN_AUTO_UPDATE", "").lower() == "true"
+    # Auto-update is ON by default. Set PUSH_PLUGIN_AUTO_UPDATE=false to disable.
+    env_value = os.environ.get("PUSH_PLUGIN_AUTO_UPDATE", "true").lower()
+    auto_update = args.auto_update or env_value != "false"
 
     # Get versions
     local_version = get_local_version()
@@ -161,14 +163,14 @@ def main():
                     timeout=30
                 )
                 if result.returncode == 0:
-                    print(f"[Push] Updated push-todo plugin: v{local_version} → v{remote_version}")
+                    print(f"[Push] Plugin updated: v{local_version} → v{remote_version}")
                     return
             except Exception:
                 pass
 
-    # Notify user about available update
-    print(f"[Push] Update available: push-todo v{local_version} → v{remote_version}")
-    print(f"[Push] Run: cd ~/.claude/skills/push-todo && git pull")
+    # Notify user about available update (couldn't auto-update)
+    print(f"[Push] Update available: v{local_version} → v{remote_version}")
+    print(f"[Push] To update: cd ~/.claude/skills/push-todo && git pull")
 
 
 if __name__ == "__main__":

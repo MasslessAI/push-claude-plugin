@@ -64,6 +64,42 @@ When you start a Claude Code session, you'll see:
 4. **Work**: Select a task and Claude helps you implement it
 5. **Complete**: Mark done → syncs back to your iPhone
 
+## Auto-Updates
+
+The plugin **auto-updates by default** — you don't need to do anything. When a new version is available, you'll see:
+
+```
+[Push] Plugin updated: v1.1.0 → v1.2.0
+```
+
+To disable auto-updates (not recommended):
+```bash
+export PUSH_PLUGIN_AUTO_UPDATE=false
+```
+
+## Development
+
+### Version Bumping
+
+Versions follow **X.Y.Z** format with automatic bumping:
+
+| Digit | Range | Overflow Behavior |
+|-------|-------|-------------------|
+| Z (patch) | 0-9 | Resets to 0, bumps Y |
+| Y (minor) | 0-9 | Resets to 0, bumps X |
+| X (major) | 0-9 | Increments normally |
+
+Example: `1.1.9` → `1.2.0` (not `1.1.10`)
+
+**Automated via GitHub Actions**: Every push to `main` that changes plugin files automatically bumps the version.
+
+Manual bump (if needed):
+```bash
+python scripts/bump-version.py           # Bump patch
+python scripts/bump-version.py --minor   # Bump minor
+python scripts/bump-version.py --major   # Bump major
+```
+
 ## Troubleshooting
 
 ### Setup doesn't complete

@@ -1,0 +1,42 @@
+name: Bump Version
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Trigger on any plugin file changes
+      - 'plugins/push-todo/**'
+      # But NOT on plugin.json changes (to avoid infinite loop)
+      - '!plugins/push-todo/.claude-plugin/plugin.json'
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+
+    # Don't run on commits made by this workflow
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, 'Bump version')"
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Bump version
+        run: python scripts/bump-version.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/push-todo/.claude-plugin/plugin.json
+          git commit -m "Bump version [skip ci]"
+          git push

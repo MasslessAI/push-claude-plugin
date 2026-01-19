@@ -172,23 +172,23 @@ Each task includes:
 
 ## Auto-Updates
 
-The plugin checks for updates from GitHub at each session start:
+The plugin auto-updates by default at each session start:
 
 | Behavior | When |
 |----------|------|
 | Silent | Plugin is up-to-date |
-| Notification | Newer version available on GitHub |
-| Auto-update | `PUSH_PLUGIN_AUTO_UPDATE=true` is set |
+| Auto-update | Newer version available (default behavior) |
+| Manual prompt | Auto-update failed (e.g., local changes) |
 
-**Update notification example:**
+**Telemetry output:**
 ```
-[Push] Update available: push-todo v1.0.0 → v1.1.0
-[Push] Run: cd ~/.claude/skills/push-todo && git pull
+[Push] Plugin updated: v1.1.0 → v1.2.0      # Auto-update succeeded
+[Push] Update available: v1.1.0 → v1.2.0    # Manual update needed
 ```
 
-**Enable auto-updates:**
+**Disable auto-updates (opt-out):**
 ```bash
-export PUSH_PLUGIN_AUTO_UPDATE=true
+export PUSH_PLUGIN_AUTO_UPDATE=false
 ```
 
 ## Error Handling
