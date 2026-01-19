@@ -17,7 +17,30 @@ Push is a voice-powered todo app. Capture tasks by speaking on your phone → wo
 
 ## Installation
 
-### Claude Code
+### Claude Code (Recommended)
+
+Install via the Claude Code plugin marketplace for automatic updates:
+
+**Step 1:** Add the Push marketplace
+```
+/plugin marketplace add MasslessAI/push-claude-plugin
+```
+
+**Step 2:** Install the plugin
+```
+/plugin install push-todo@MasslessAI/push-claude-plugin
+```
+
+**Step 3:** Connect your account
+```
+/push-todo setup
+```
+
+That's it! Auto-updates are now enabled.
+
+### Quick Install (Legacy)
+
+For a one-liner install (does not support auto-updates):
 
 ```bash
 curl -sL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh | bash
@@ -66,16 +89,14 @@ When you start a Claude Code session, you'll see:
 
 ## Auto-Updates
 
-The plugin **auto-updates by default** — you don't need to do anything. When a new version is available, you'll see:
+If installed via the marketplace (recommended), updates are **automatic**. Claude Code handles this natively — you don't need to do anything.
 
+When a new version is available, you'll see:
 ```
-[Push] Plugin updated: v1.1.0 → v1.2.0
+Plugin push-todo updated: v1.2.0 → v1.2.1
 ```
 
-To disable auto-updates (not recommended):
-```bash
-export PUSH_PLUGIN_AUTO_UPDATE=false
-```
+**Legacy installations** (curl) do not support auto-updates. Run `/push-todo setup` to see migration instructions.
 
 ## Development
 

@@ -1,19 +1,15 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "push-claude-plugin",
-  "version": "1.0.0",
-  "description": "Voice tasks from Push iOS app -> Claude Code & OpenAI Codex",
+  "name": "push-plugins",
+  "description": "Voice tasks from Push iOS app",
   "owner": {
-    "name": "Push",
+    "name": "MasslessAI",
     "email": "support@pushto.do"
   },
   "plugins": [
     {
       "name": "push-todo",
-      "description": "Receive voice tasks from Push iOS app. Record on iPhone -> work in Claude Code.",
-      "source": "./plugins/push-todo",
-      "category": "productivity",
-      "version": "1.0.0"
+      "description": "Receive and work on voice tasks captured on your iPhone",
+      "source": "./plugins/push-todo"
     }
   ]
 }

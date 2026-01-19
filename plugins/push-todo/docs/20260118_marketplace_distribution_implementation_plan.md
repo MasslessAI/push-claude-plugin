@@ -1,0 +1,529 @@
+# Push Todo Plugin: Marketplace Distribution Implementation Plan
+
+**Date:** 2026-01-18
+**Status:** Planning
+**Goal:** Convert from custom curl/git-based installation to Claude Code native marketplace distribution
+
+---
+
+## Executive Summary
+
+The current push-todo plugin uses a custom installation and update mechanism (curl download + git pull) that doesn't work properly and confuses users. This plan migrates to Claude Code's native marketplace system, which provides:
+
+- Zero-friction auto-updates
+- Professional distribution
+- No git knowledge required for users
+- Same UX as official Anthropic plugins
+
+---
+
+## Current State Analysis
+
+### What We Have Now
+
+```
+push-claude-plugin/
+├── .claude-plugin/
+│   ├── marketplace.json    # Exists but incomplete
+│   └── plugin.json         # Exists, version 1.0.0
+├── plugins/
+│   └── push-todo/
+│       ├── .claude-plugin/
+│       │   └── plugin.json # Version 1.2.0 (mismatch!)
+│       ├── commands/
+│       │   └── push-todo.md
+│       ├── hooks/
+│       │   └── session-start.sh
+│       ├── scripts/
+│       │   ├── check_tasks.py
+│       │   ├── check_updates.py  # BROKEN for curl installs
+│       │   ├── fetch_task.py
+│       │   └── setup.py
+│       ├── skills/
+│       │   └── push-todo/SKILL.md
+│       └── SKILL.md
+├── install.sh              # Downloads files via curl
+└── README.md
+```
+
+### Current Installation Flow (Broken)
+
+```
+User                          GitHub                      Local Machine
+  │                              │                             │
+  │  curl install.sh | bash     │                             │
+  │─────────────────────────────>│                             │
+  │                              │  Download individual files  │
+  │                              │────────────────────────────>│
+  │                              │                             │
+  │                              │  Files in ~/.claude/skills/ │
+  │                              │  (NO .git directory!)       │
+  │                              │                             │
+  │  Session starts              │                             │
+  │                              │                             │
+  │  check_updates.py runs       │                             │
+  │                              │  Checks GitHub for version  │
+  │                              │<────────────────────────────│
+  │                              │                             │
+  │  "Update available!"         │  is_git_repo() = FALSE      │
+  │  "Run: git pull"             │  git pull IMPOSSIBLE!       │
+  │<─────────────────────────────│                             │
+  │                              │                             │
+  │  User is confused            │                             │
+```
+
+### Problems
+
+| Issue | Impact |
+|-------|--------|
+| curl installs files, not git repo | `git pull` impossible |
+| `check_updates.py` assumes git | Auto-update never works for curl users |
+| Version mismatch (1.0.0 vs 1.2.0) | Inconsistent state |
+| Custom update mechanism | Reinventing the wheel poorly |
+| "Run git pull" message | Confuses non-technical users |
+
+---
+
+## Target State: Native Marketplace Distribution
+
+### How Claude Code Marketplaces Work
+
+```
+User                          Claude Code                 GitHub
+  │                              │                          │
+  │  /plugin marketplace add     │                          │
+  │  MasslessAI/push-claude-plugin                          │
+  │─────────────────────────────>│                          │
+  │                              │  Clone marketplace repo  │
+  │                              │─────────────────────────>│
+  │                              │                          │
+  │                              │  Read marketplace.json   │
+  │                              │<─────────────────────────│
+  │                              │                          │
+  │  /plugin install             │                          │
+  │  push-todo@MasslessAI/...    │                          │
+  │─────────────────────────────>│                          │
+  │                              │  Install plugin          │
+  │                              │─────────────────────────>│
+  │                              │                          │
+  │  Session starts (next time)  │                          │
+  │                              │  Auto-check for updates  │
+  │                              │─────────────────────────>│
+  │                              │                          │
+  │  [Push] Plugin updated:      │  Auto-pull if newer      │
+  │  v1.2.0 → v1.3.0            │<─────────────────────────│
+```
+
+### Benefits
+
+| Feature | Custom (Current) | Marketplace (Target) |
+|---------|------------------|---------------------|
+| Installation | curl script | `/plugin install` |
+| Auto-update | Broken | Native, just works |
+| User knowledge required | git commands | None |
+| Update mechanism | Custom Python | Claude Code built-in |
+| Version tracking | Manual | Automatic |
+| Rollback | Impossible | Built-in |
+
+---
+
+## Implementation Plan
+
+### Phase 1: Fix Marketplace Structure
+
+**Files to modify:**
+
+#### 1.1 Root `/.claude-plugin/marketplace.json`
+
+Current:
+```json
+{
+  "name": "push-claude-plugin",
+  "version": "1.0.0",
+  "plugins": [{
+    "name": "push-todo",
+    "source": "./plugins/push-todo",
+    "version": "1.0.0"  // Wrong!
+  }]
+}
+```
+
+Target:
+```json
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "push-plugins",
+  "description": "Voice tasks from Push iOS app",
+  "owner": {
+    "name": "MasslessAI",
+    "email": "support@pushto.do",
+    "url": "https://pushto.do"
+  },
+  "plugins": [
+    {
+      "name": "push-todo",
+      "description": "Receive and work on voice tasks captured on your iPhone",
+      "source": "./plugins/push-todo",
+      "category": "productivity"
+    }
+  ]
+}
+```
+
+**Note:** Version is read from the plugin's own `plugin.json`, not duplicated here.
+
+#### 1.2 Plugin `/plugins/push-todo/.claude-plugin/plugin.json`
+
+Current:
+```json
+{
+  "name": "push-todo",
+  "version": "1.2.0",
+  "description": "Receive and work on voice tasks captured on Push iOS app",
+  ...
+}
+```
+
+Target (add required fields):
+```json
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "push-todo",
+  "version": "1.2.1",
+  "description": "Receive and work on voice tasks captured on your iPhone using the Push app",
+  "author": {
+    "name": "MasslessAI",
+    "email": "support@pushto.do",
+    "url": "https://pushto.do"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MasslessAI/push-claude-plugin"
+  },
+  "homepage": "https://pushto.do",
+  "license": "MIT",
+  "keywords": ["voice", "tasks", "ios", "mobile", "todo", "productivity", "push", "iphone"],
+  "category": "productivity",
+  "engines": {
+    "claude-code": ">=1.0.0"
+  }
+}
+```
+
+### Phase 2: Remove Custom Update Mechanism
+
+**Files to delete:**
+- `/plugins/push-todo/scripts/check_updates.py` - No longer needed
+
+**Files to modify:**
+
+#### 2.1 Session Start Hook
+
+Remove update check from `/plugins/push-todo/hooks/session-start.sh`:
+
+```bash
+#!/bin/bash
+# Push Session Start Hook for Claude Code
+# Only checks for active tasks - updates handled by Claude Code marketplace
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Check for active tasks
+COUNT=$(python3 "$PLUGIN_DIR/scripts/check_tasks.py" 2>/dev/null)
+
+if [ $? -ne 0 ]; then
+    exit 0
+fi
+
+if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ]; then
+    if [ "$COUNT" -eq 1 ]; then
+        echo "[Push] You have 1 active task from your iPhone. Say 'push-todo' to see it."
+    else
+        echo "[Push] You have $COUNT active tasks from your iPhone. Say 'push-todo' to see them."
+    fi
+fi
+```
+
+### Phase 3: Simplify Installation
+
+**Current flow:**
+```bash
+curl -sL https://raw.githubusercontent.com/.../install.sh | bash
+# Then: /push-todo setup
+```
+
+**New flow:**
+```bash
+/plugin marketplace add MasslessAI/push-claude-plugin
+/plugin install push-todo@MasslessAI/push-claude-plugin
+# Then: /push-todo setup
+```
+
+#### 3.1 Update README.md
+
+```markdown
+## Installation
+
+### Option 1: Claude Code Plugin (Recommended)
+
+1. Add the Push marketplace:
+   ```
+   /plugin marketplace add MasslessAI/push-claude-plugin
+   ```
+
+2. Install the plugin:
+   ```
+   /plugin install push-todo@MasslessAI/push-claude-plugin
+   ```
+
+3. Connect your account:
+   ```
+   /push-todo setup
+   ```
+
+### Option 2: Quick Install (Legacy)
+
+For users who prefer a one-liner:
+```bash
+curl -sL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh | bash
+```
+
+Note: This method does not support auto-updates. Use the plugin marketplace for automatic updates.
+```
+
+#### 3.2 Update install.sh (Keep for Legacy)
+
+Add deprecation notice:
+```bash
+#!/bin/bash
+echo "=========================================="
+echo "NOTICE: This installation method is deprecated."
+echo ""
+echo "For auto-updates, use the Claude Code marketplace instead:"
+echo "  /plugin marketplace add MasslessAI/push-claude-plugin"
+echo "  /plugin install push-todo@MasslessAI/push-claude-plugin"
+echo ""
+echo "Continuing with legacy installation..."
+echo "=========================================="
+sleep 2
+
+# ... rest of script
+```
+
+### Phase 4: Setup Command Updates
+
+#### 4.1 `/push-todo setup` Should Handle Everything
+
+The setup command should:
+1. Check if installed via marketplace vs curl
+2. For curl installs, suggest migrating to marketplace
+3. Handle API key configuration
+
+Update `/plugins/push-todo/scripts/setup.py` to add marketplace migration hint:
+
+```python
+def check_installation_method():
+    """Check how the plugin was installed."""
+    plugin_dir = Path(__file__).parent.parent
+
+    # Check if this is a marketplace installation
+    # Marketplace installs are in ~/.claude/plugins/ not ~/.claude/skills/
+    if "plugins" in str(plugin_dir):
+        return "marketplace"
+    elif plugin_dir.is_symlink():
+        return "development"
+    else:
+        return "legacy"
+
+def suggest_migration():
+    """Suggest migrating to marketplace if using legacy install."""
+    method = check_installation_method()
+    if method == "legacy":
+        print("\n" + "="*50)
+        print("TIP: You're using a legacy installation.")
+        print("For auto-updates, migrate to the marketplace:")
+        print("")
+        print("  /plugin marketplace add MasslessAI/push-claude-plugin")
+        print("  /plugin install push-todo@MasslessAI/push-claude-plugin")
+        print("="*50 + "\n")
+```
+
+### Phase 5: Version Management
+
+#### 5.1 Single Source of Truth
+
+Version should only be defined in:
+- `/plugins/push-todo/.claude-plugin/plugin.json`
+
+Remove version from:
+- `/.claude-plugin/marketplace.json` (plugins section)
+- `/.claude-plugin/plugin.json` (root level - this is marketplace metadata, not plugin)
+
+#### 5.2 Update bump-version.py
+
+Modify `/scripts/bump-version.py` to only update the plugin's plugin.json:
+
+```python
+PLUGIN_JSON = Path(__file__).parent.parent / "plugins/push-todo/.claude-plugin/plugin.json"
+
+def bump_version(version_type="patch"):
+    with open(PLUGIN_JSON) as f:
+        data = json.load(f)
+
+    current = data["version"]
+    new_version = calculate_new_version(current, version_type)
+    data["version"] = new_version
+
+    with open(PLUGIN_JSON, "w") as f:
+        json.dump(data, f, indent=2)
+
+    return new_version
+```
+
+### Phase 6: GitHub Actions for Auto-Versioning
+
+Keep existing workflow but simplify:
+
+```yaml
+# .github/workflows/bump-version.yml
+name: Bump Version
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/push-todo/**'
+      - '!plugins/push-todo/.claude-plugin/plugin.json'
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Bump version
+        run: python scripts/bump-version.py
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/push-todo/.claude-plugin/plugin.json
+          git commit -m "chore: bump version" || exit 0
+          git push
+```
+
+---
+
+## Migration Guide for Existing Users
+
+### For Curl-Installed Users
+
+```bash
+# 1. Remove old installation
+rm -rf ~/.claude/skills/push-todo
+
+# 2. Install via marketplace
+/plugin marketplace add MasslessAI/push-claude-plugin
+/plugin install push-todo@MasslessAI/push-claude-plugin
+
+# 3. Your config is preserved in ~/.config/push/
+# No need to run setup again!
+```
+
+### For Development (Symlink) Users
+
+No change needed. Symlinks continue to work, and you can test marketplace features locally.
+
+---
+
+## Testing Plan
+
+### Test 1: Fresh Marketplace Install
+1. Remove any existing push-todo installation
+2. Run `/plugin marketplace add MasslessAI/push-claude-plugin`
+3. Run `/plugin install push-todo@MasslessAI/push-claude-plugin`
+4. Verify `/push-todo` command works
+5. Verify session-start hook shows task count
+
+### Test 2: Auto-Update
+1. Install plugin at version X
+2. Push a change to GitHub (triggers version bump to X+1)
+3. Start new Claude Code session
+4. Verify auto-update message appears
+5. Verify new version is installed
+
+### Test 3: Legacy Install Warning
+1. Install via curl
+2. Run `/push-todo setup`
+3. Verify migration hint is displayed
+
+### Test 4: Config Preservation
+1. Install, run setup, verify tasks appear
+2. Uninstall
+3. Reinstall via marketplace
+4. Verify tasks still appear (config preserved)
+
+---
+
+## Rollout Plan
+
+### Phase 1: Prepare (This PR)
+- [ ] Fix marketplace.json structure
+- [ ] Fix plugin.json structure
+- [ ] Remove check_updates.py
+- [ ] Update session-start.sh
+- [ ] Update README.md
+
+### Phase 2: Soft Launch
+- [ ] Test with developer accounts
+- [ ] Verify auto-update works
+- [ ] Document any issues
+
+### Phase 3: Announce
+- [ ] Update Push iOS app to show new install instructions
+- [ ] Deprecate curl install in documentation
+- [ ] Monitor for user issues
+
+### Phase 4: Cleanup (2 weeks later)
+- [ ] Remove install.sh or make it redirect to marketplace
+- [ ] Remove legacy code paths
+
+---
+
+## Files Changed Summary
+
+| File | Action | Notes |
+|------|--------|-------|
+| `/.claude-plugin/marketplace.json` | Modify | Fix structure |
+| `/.claude-plugin/plugin.json` | Modify | This is marketplace metadata |
+| `/plugins/push-todo/.claude-plugin/plugin.json` | Modify | Add required fields |
+| `/plugins/push-todo/scripts/check_updates.py` | Delete | No longer needed |
+| `/plugins/push-todo/hooks/session-start.sh` | Modify | Remove update check |
+| `/plugins/push-todo/scripts/setup.py` | Modify | Add migration hint |
+| `/scripts/bump-version.py` | Modify | Single source of truth |
+| `/README.md` | Modify | New install instructions |
+| `/install.sh` | Modify | Add deprecation notice |
+
+---
+
+## Open Questions
+
+1. **Backward Compatibility:** Should we keep curl install working indefinitely or sunset it?
+   - Recommendation: Keep for 3 months, then remove
+
+2. **Codex CLI:** The `/codex` folder has a separate install script. Should we create a separate marketplace for it?
+   - Recommendation: Yes, but lower priority
+
+3. **Version Sync:** How to ensure GitHub Actions version bump and marketplace are in sync?
+   - Answer: Version is only in plugin.json, marketplace reads it
+
+---
+
+## References
+
+- [Claude Code Plugin Marketplaces](https://code.claude.com/docs/en/plugin-marketplaces)
+- [Create Plugins](https://code.claude.com/docs/en/plugins)
+- [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official)

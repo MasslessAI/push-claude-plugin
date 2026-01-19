@@ -1,7 +1,22 @@
 #!/bin/bash
-# Install Push Tasks skill for Claude Code
+# Install Push Tasks skill for Claude Code (Legacy Method)
 
 set -e
+
+echo ""
+echo "=============================================="
+echo "  NOTICE: This installation method is legacy."
+echo ""
+echo "  For auto-updates, use the marketplace instead:"
+echo ""
+echo "  Step 1: /plugin marketplace add MasslessAI/push-claude-plugin"
+echo "  Step 2: /plugin install push-todo@MasslessAI/push-claude-plugin"
+echo "  Step 3: /push-todo setup"
+echo ""
+echo "  Continuing with legacy installation..."
+echo "=============================================="
+echo ""
+sleep 2
 
 echo "Installing Push Tasks for Claude Code..."
 

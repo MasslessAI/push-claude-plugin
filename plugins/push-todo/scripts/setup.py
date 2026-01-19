@@ -25,6 +25,7 @@ import time
 import webbrowser
 import urllib.request
 import urllib.error
+from pathlib import Path
 from typing import Optional
 
 # Configuration
@@ -404,6 +405,62 @@ def show_status():
 
 
 # ============================================================================
+# INSTALLATION METHOD DETECTION
+# ============================================================================
+
+def get_installation_method() -> str:
+    """
+    Detect how the plugin was installed.
+
+    Returns:
+        "marketplace" - Installed via Claude Code marketplace (in ~/.claude/plugins/)
+        "development" - Symlinked for development
+        "legacy" - Installed via curl (files in ~/.claude/skills/, no git)
+    """
+    plugin_dir = Path(__file__).parent.parent
+
+    # Check if this is a marketplace installation
+    # Marketplace installs are in ~/.claude/plugins/, not ~/.claude/skills/
+    if ".claude/plugins" in str(plugin_dir):
+        return "marketplace"
+
+    # Check if it's a symlink (development setup)
+    skills_path = Path.home() / ".claude" / "skills" / "push-todo"
+    if skills_path.is_symlink():
+        return "development"
+
+    # Check if there's a .git directory (cloned, not curl)
+    git_dir = plugin_dir / ".git"
+    if git_dir.exists():
+        return "development"
+
+    # Otherwise it's a legacy curl installation
+    return "legacy"
+
+
+def show_migration_hint():
+    """Show migration hint for legacy installations."""
+    method = get_installation_method()
+    if method == "legacy":
+        print()
+        print("  " + "-" * 50)
+        print("  TIP: You're using a legacy installation.")
+        print("  For auto-updates, migrate to the marketplace:")
+        print()
+        print("  Step 1: Remove old installation")
+        print("    rm -rf ~/.claude/skills/push-todo")
+        print()
+        print("  Step 2: Add marketplace")
+        print("    /plugin marketplace add MasslessAI/push-claude-plugin")
+        print()
+        print("  Step 3: Install plugin")
+        print("    /plugin install push-todo@MasslessAI/push-claude-plugin")
+        print()
+        print("  Your config (~/.config/push/) will be preserved.")
+        print("  " + "-" * 50)
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -475,6 +532,9 @@ def main():
                 print("  Your iOS app will sync this automatically.")
             else:
                 print("  This project is already configured.")
+
+            # Show migration hint for legacy installations
+            show_migration_hint()
             print()
             return
 
@@ -513,6 +573,9 @@ def main():
     print("  " + "=" * 40)
     print()
     print("  Your iOS app will sync this automatically.")
+
+    # Show migration hint for legacy installations
+    show_migration_hint()
     print()
 
 
