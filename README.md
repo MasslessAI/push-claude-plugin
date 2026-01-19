@@ -8,20 +8,17 @@ Capture coding tasks by voice on your iPhone → work on them in Claude Code.
 
 ## Install
 
-### Option A: Quick Install (One Command)
+### Option A: Quick Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-claude-plugin/main/install.sh | bash
 ```
 
-Then restart Claude Code and run:
-```
-/push-todo setup
-```
+Then restart Claude Code and run `/push-todo setup`.
 
-### Option B: Marketplace Install
+### Option B: Manual Install
 
-If you prefer automatic updates:
+If you prefer to run the commands yourself:
 
 ```
 /plugin marketplace add MasslessAI/push-claude-plugin
@@ -58,11 +55,14 @@ You can also just say "show my Push tasks" and Claude will understand.
 
 ## Updates
 
-| Install Method | How Updates Work |
-|----------------|------------------|
-| **Marketplace (auto-update ON)** | Automatic at startup |
-| **Marketplace (auto-update OFF)** | Run `/push-todo setup` to check |
-| **Quick Install (curl)** | Run `/push-todo setup` to check and update |
+Both install methods use the marketplace, so updates work the same way:
+
+| Setting | How Updates Work |
+|---------|------------------|
+| **Auto-update ON** | Automatic at startup |
+| **Auto-update OFF** | Run `/push-todo setup` to check |
+
+Enable auto-updates: `/plugin` → Marketplaces → push-claude-plugin → Enable auto-update
 
 The `/push-todo setup` command handles everything: checks for updates, validates your connection, and registers your project.
 
