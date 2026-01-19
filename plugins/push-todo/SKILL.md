@@ -186,7 +186,11 @@ python3 ~/.claude/skills/push-todo/scripts/setup.py --check-version
    ```bash
    python3 ~/.claude/skills/push-todo/scripts/setup.py --update
    ```
-4. Continue regardless of update result (warn if failed)
+4. Handle update result:
+   - `"status": "success"` → Continue to Step 2
+   - `"status": "manual_required"` → Tell user to run the command in `"command"` field (e.g., `claude plugin update push-todo`), then continue
+   - `"status": "failed"` → Warn user, but continue
+   - `"status": "skipped"` → Continue silently (development installs)
 
 **If `up_to_date` or `unknown`:** Continue silently.
 
@@ -274,11 +278,12 @@ Updates are handled via the doctor flow in `/push-todo setup`.
 
 | Installation Type | Update Method |
 |-------------------|---------------|
-| **Marketplace** | Automatic (Claude Code handles it) |
+| **Marketplace (auto-update ON)** | Automatic (Claude Code handles it) |
+| **Marketplace (auto-update OFF)** | `claude plugin update push-todo` |
 | **Development** | Use `git pull` |
 | **Legacy (curl)** | Via `--update` flag in setup |
 
-The doctor flow checks for updates and prompts the user for confirmation before updating.
+**Important:** Claude Code does NOT notify users about updates when auto-update is disabled. The doctor flow in `/push-todo setup` fills this gap by checking versions and guiding users to update.
 
 **Manual update check:**
 ```bash

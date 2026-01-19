@@ -198,15 +198,19 @@ def do_update() -> dict:
     Update the plugin by re-running the install script.
 
     Returns dict with:
-        - status: "success", "failed", "skipped"
+        - status: "success", "failed", "skipped", "manual_required"
         - message: Human-readable message
+        - command: (optional) Command for user to run manually
     """
     method = get_installation_method()
 
     if method == "marketplace":
+        # Claude Code marketplace - we can't update programmatically
+        # User must run update command themselves (auto-update may be disabled)
         return {
-            "status": "skipped",
-            "message": "Marketplace installation - updates are automatic"
+            "status": "manual_required",
+            "message": "Marketplace installation - run update command in Claude Code",
+            "command": "claude plugin update push-todo"
         }
 
     if method == "development":
