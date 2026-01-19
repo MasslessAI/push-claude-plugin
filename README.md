@@ -31,12 +31,17 @@ Install via the Claude Code plugin marketplace for automatic updates:
 /plugin install push-todo@MasslessAI/push-claude-plugin
 ```
 
-**Step 3:** Connect your account
+**Step 3:** Enable auto-updates
+```
+/plugin → Marketplaces → MasslessAI/push-claude-plugin → Enable auto-update
+```
+
+**Step 4:** Connect your account
 ```
 /push-todo setup
 ```
 
-That's it! Auto-updates are now enabled.
+Done! Updates will be applied automatically at startup.
 
 ### Quick Install (Legacy)
 

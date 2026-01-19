@@ -456,6 +456,9 @@ def show_migration_hint():
         print("  Step 3: Install plugin")
         print("    /plugin install push-todo@MasslessAI/push-claude-plugin")
         print()
+        print("  Step 4: Enable auto-updates")
+        print("    /plugin -> Marketplaces -> Enable auto-update")
+        print()
         print("  Your config (~/.config/push/) will be preserved.")
         print("  " + "-" * 50)
 
