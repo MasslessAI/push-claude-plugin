@@ -289,8 +289,24 @@ Both curl and marketplace install use the same plugin system, so updates work id
 
 > **Note:** "Development" installs (symlinks) are internal only for plugin maintainers, not a user scenario.
 
-**How we detect marketplace auto-update status:**
-The setup script reads `~/.claude/plugins/known_marketplaces.json` and checks the `autoUpdate` field for our marketplace. Third-party marketplaces default to auto-update OFF.
+### Legacy Migration (Pre-1.4.0 Installs)
+
+Users who installed before version 1.4.0 (when curl created a skill instead of a plugin) are automatically migrated:
+
+1. User runs `/push-todo setup`
+2. Setup detects "legacy" install (files in `~/.claude/skills/`)
+3. Update runs NEW install.sh → installs via marketplace CLI
+4. Plugin is now installed in `~/.claude/plugins/cache/`
+5. **Next run:** Claude Code uses the PLUGIN, detection returns "marketplace"
+
+Old files in `~/.claude/skills/push-todo/` become orphaned. Users see a hint to clean them up:
+```bash
+rm -rf ~/.claude/skills/push-todo
+```
+
+### Auto-Update Detection
+
+The setup script reads `~/.claude/plugins/known_marketplaces.json` and checks the `autoUpdate` field. Third-party marketplaces default to auto-update OFF.
 
 **Important:** Claude Code does NOT notify users about updates when auto-update is disabled. The doctor flow fills this gap by checking versions and guiding users to update.
 
