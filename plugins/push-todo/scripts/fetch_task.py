@@ -159,7 +159,7 @@ def get_api_key() -> str:
     # 3. Not found - provide helpful error message
     raise ValueError(
         "PUSH_API_KEY not configured.\n"
-        "Run: /push-todo setup\n"
+        "Run: /push-todo connect\n"
         "Or manually add to ~/.config/push/config:\n"
         '  export PUSH_API_KEY="your-key-here"'
     )
@@ -215,7 +215,7 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
             ]
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            raise ValueError("Invalid API key. Run 'push setup' to configure.")
+            raise ValueError("Invalid API key. Run '/push-todo connect' to configure.")
         if e.code == 404:
             # No action registered for this project
             return []
@@ -280,7 +280,7 @@ def fetch_task_by_number(display_number: int) -> Optional[dict]:
             }
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            raise ValueError("Invalid API key. Run 'push setup' to configure.")
+            raise ValueError("Invalid API key. Run '/push-todo connect' to configure.")
         if e.code == 404:
             return None
         raise

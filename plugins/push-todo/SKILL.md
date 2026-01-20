@@ -180,9 +180,9 @@ When the user runs `/push-todo review`, check recent git activity against active
 
 **Keep it simple:** Only match obvious semantic overlaps. Don't analyze file contents or grep the codebase - that's the main agent's job.
 
-## Setup Mode (Doctor Flow)
+## Connect Mode (Doctor Flow)
 
-When `/push-todo setup` is invoked, run a comprehensive health check. This is the ONE command users need to run - it handles everything.
+When `/push-todo connect` is invoked, run a comprehensive health check. This is the ONE command users need to run - it handles everything.
 
 ### Full Doctor Flow
 
@@ -191,7 +191,7 @@ Execute these steps **in order**. Stop early if a critical issue needs user acti
 #### Step 1: Check Plugin Version
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" --check-version
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --check-version
 ```
 
 > **Note:** `$CLAUDE_PLUGIN_ROOT` is set by Claude Code to the plugin's directory. Falls back to `~/.claude/skills/push-todo` for development.
@@ -211,7 +211,7 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py"
 2. **Wait for user confirmation** (semantic response like "yes", "sure", "go ahead")
 3. If confirmed, run update:
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" --update
+   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --update
    ```
 4. Handle update result:
    - `"status": "success"` → Continue to Step 2
@@ -224,7 +224,7 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py"
 #### Step 2: Validate API Key
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" --validate-key
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --validate-key
 ```
 
 **JSON Response:**
@@ -238,9 +238,9 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py"
 
 **If `missing` or `invalid` or `revoked`:**
 1. Tell the user: "Your Push connection needs to be set up. I'll open a browser for Sign in with Apple."
-2. Run full setup (opens browser):
+2. Run full connect (opens browser):
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py"
+   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py"
    ```
 3. After auth completes, continue to Step 3.
 
@@ -260,16 +260,16 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py"
 
 3. **Generate description** - Concise 1-sentence (<100 chars)
 
-4. **Run setup with generated values**:
+4. **Run connect with generated values**:
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" \
+   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" \
      --keywords "keyword1,keyword2,keyword3" \
      --description "Short project description"
    ```
 
 **Example for Push project:**
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" \
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" \
   --keywords "push,voice,todo,whisper,ios,swift,swiftui,swiftdata,cloudkit,realtime,supabase" \
   --description "Voice-powered todo app for iOS with realtime sync"
 ```
@@ -280,7 +280,7 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py"
 - **API validation:** Catches revoked keys before tasks fail
 - **Keywords:** Help AI route voice tasks to the correct project
 
-Users only need to remember one command: `/push-todo setup`
+Users only need to remember one command: `/push-todo connect`
 
 ## Task Fields
 
@@ -301,7 +301,7 @@ Each task includes:
 
 ## Updates
 
-Updates are handled via the doctor flow in `/push-todo setup`.
+Updates are handled via the doctor flow in `/push-todo connect`.
 
 Both curl and marketplace install use the same plugin system, so updates work identically:
 
@@ -316,7 +316,7 @@ Both curl and marketplace install use the same plugin system, so updates work id
 
 Users who installed before version 1.4.0 (when curl created a skill instead of a plugin) are automatically migrated:
 
-1. User runs `/push-todo setup`
+1. User runs `/push-todo connect`
 2. Setup detects "legacy" install (files in `~/.claude/skills/`)
 3. Update runs NEW install.sh → installs via marketplace CLI
 4. Plugin is now installed in `~/.claude/plugins/cache/`
@@ -329,18 +329,18 @@ rm -rf ~/.claude/skills/push-todo
 
 ### Auto-Update Detection
 
-The setup script reads `~/.claude/plugins/known_marketplaces.json` and checks the `autoUpdate` field. Third-party marketplaces default to auto-update OFF.
+The connect script reads `~/.claude/plugins/known_marketplaces.json` and checks the `autoUpdate` field. Third-party marketplaces default to auto-update OFF.
 
 **Important:** Claude Code does NOT notify users about updates when auto-update is disabled. The doctor flow fills this gap by checking versions and guiding users to update.
 
 **Manual update check:**
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" --check-version
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py" --update
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --check-version
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --update
 ```
 
 ## Error Handling
 
 If the API returns an error:
 - Check if PUSH_API_KEY is set in ~/.config/push/config
-- Suggest: "Run `/push-todo setup` to configure your Push connection"
+- Suggest: "Run `/push-todo connect` to configure your Push connection"

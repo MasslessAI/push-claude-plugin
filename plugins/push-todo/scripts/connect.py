@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Smart setup for Push integration (Doctor Mode).
+Smart connect for Push integration (Doctor Mode).
 
-This script is a comprehensive health check and setup tool:
+This script is a comprehensive health check and connect tool:
 - Version check: Compare local vs remote plugin version
 - API validation: Verify API key is still valid
 - Project registration: Register current project with keywords
 - Authentication: Handle initial auth or re-auth when needed
 
 Usage:
-    python setup.py                      # Full doctor flow
-    python setup.py --check-version      # Check for updates only
-    python setup.py --update             # Update to latest version
-    python setup.py --validate-key       # Validate API key only
-    python setup.py --client claude-code # Explicit client type
-    python setup.py --reauth             # Force re-authentication
+    python connect.py                      # Full doctor flow
+    python connect.py --check-version      # Check for updates only
+    python connect.py --update             # Update to latest version
+    python connect.py --validate-key       # Validate API key only
+    python connect.py --client claude-code # Explicit client type
+    python connect.py --reauth             # Force re-authentication
 
 See: /docs/20260114_cli_action_auto_creation_implementation_plan.md
 """
@@ -524,7 +524,7 @@ def do_full_device_auth(client_type: str = "claude-code") -> dict:
     try:
         device_data = initiate_device_flow(client_type)
     except Exception as e:
-        print(f"  Error: Failed to initiate setup: {e}")
+        print(f"  Error: Failed to initiate connection: {e}")
         sys.exit(1)
 
     device_code = device_data["device_code"]
@@ -560,7 +560,7 @@ def do_full_device_auth(client_type: str = "claude-code") -> dict:
         elapsed = time.time() - start_time
         if elapsed > expires_in:
             print()
-            print("  Error: Authorization timed out. Please run setup again.")
+            print("  Error: Authorization timed out. Please run connect again.")
             print()
             sys.exit(1)
 
@@ -592,7 +592,7 @@ def do_full_device_auth(client_type: str = "claude-code") -> dict:
 
             elif result["status"] == "expired":
                 print()
-                print("  Error: Authorization expired. Please run setup again.")
+                print("  Error: Authorization expired. Please run connect again.")
                 print()
                 sys.exit(1)
 
@@ -639,17 +639,17 @@ def show_status():
         else:
             print(f"    Path: {get_project_path()}")
         print()
-        print("  Run 'setup' to register this project.")
-        print("  Run 'setup --reauth' to re-authenticate.")
+        print("  Run 'connect' to register this project.")
+        print("  Run 'connect --reauth' to re-authenticate.")
     elif existing_key:
         print(f"  ⚠ Partial config (missing email)")
         print(f"    API key: {existing_key[:16]}...")
         print()
-        print("  Run 'setup --reauth' to fix.")
+        print("  Run 'connect --reauth' to fix.")
     else:
         print("  ✗ Not connected")
         print()
-        print("  Run 'setup' to connect your Push account.")
+        print("  Run 'connect' to connect your Push account.")
 
     print()
 
@@ -903,7 +903,7 @@ def main():
         else:
             print()
             print(f"  Registration failed: {result.get('message', 'Unknown error')}")
-            print("  Trying full setup...")
+            print("  Trying full connection...")
             print()
             # Fall through to full auth
 

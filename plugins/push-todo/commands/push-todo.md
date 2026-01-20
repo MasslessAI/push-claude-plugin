@@ -12,7 +12,7 @@ This command fetches and displays your active voice tasks from the Push iOS app.
 - `/push-todo` - Show active tasks for current project
 - `/push-todo #427` - Jump directly to task #427
 - `/push-todo review` - Review existing tasks and mark completed ones
-- `/push-todo setup` - Configure your Push connection
+- `/push-todo connect` - Configure your Push connection
 
 > **Note:** To see tasks from all projects, ask explicitly: "show tasks from all projects"
 
@@ -20,12 +20,12 @@ This command fetches and displays your active voice tasks from the Push iOS app.
 
 When this command is invoked:
 
-1. **Check for setup**: First verify the config exists:
+1. **Check for connect**: First verify the config exists:
    ```bash
    test -f ~/.config/push/config && echo "configured" || echo "not configured"
    ```
 
-2. **If not configured**: Run the setup flow (see [Setup Mode](#setup-mode) below)
+2. **If not configured**: Run the connect flow (see [Connect Mode](#connect-mode) below)
 
 3. **If configured**: Fetch tasks:
    ```bash
@@ -97,9 +97,9 @@ python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task
 - Explicit: User said "work on #701" but forgot to mark complete
 - Implicit: User fixed something that matches a task they didn't mention
 
-## Setup Mode
+## Connect Mode
 
-When `/push-todo setup` is invoked, generate project-specific keywords BEFORE running the setup script.
+When `/push-todo connect` is invoked, generate project-specific keywords BEFORE running the connect script.
 
 ### Why Keywords Matter
 
@@ -147,7 +147,7 @@ Generate a short (5-15 words) description that captures what makes this project 
 ### Step 4: Run Setup with Keywords
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py \
+python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py \
   --keywords "keyword1,keyword2,keyword3,..." \
   --description "Short unique description of this project"
 ```
@@ -156,21 +156,21 @@ python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py \
 
 **For a voice todo app (Push):**
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py \
+python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py \
   --keywords "push,voice,todo,whisper,ios,swiftui,recording,speech,transcription" \
   --description "Voice-powered todo app for iOS with whisper speech recognition"
 ```
 
 **For a web scraping project:**
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py \
+python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py \
   --keywords "scraper,crawler,beautifulsoup,selenium,extraction,parsing" \
   --description "Web scraping tool for data extraction"
 ```
 
 **For a game engine:**
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/setup.py \
+python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py \
   --keywords "engine,graphics,rendering,physics,ecs,vulkan,gamedev" \
   --description "Custom game engine with Vulkan renderer"
 ```
