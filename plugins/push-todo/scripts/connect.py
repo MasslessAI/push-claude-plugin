@@ -764,7 +764,7 @@ def show_migration_hint():
 
 def main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Setup Push integration (Doctor Mode)")
+    parser = argparse.ArgumentParser(description="Connect to Push (Doctor Mode)")
     parser.add_argument(
         "--client",
         choices=["claude-code", "openai-codex"],
@@ -848,7 +848,7 @@ def main():
     client_name = client_names.get(client_type, "Claude Code")
 
     print()
-    print(f"  Push Voice Tasks Setup")
+    print(f"  Push Voice Tasks Connect")
     print("  " + "=" * 40)
     print()
 
@@ -939,6 +939,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n")
-        print("  Setup cancelled.")
+        print("  Connection cancelled.")
         print()
         sys.exit(1)

@@ -317,7 +317,7 @@ Both curl and marketplace install use the same plugin system, so updates work id
 Users who installed before version 1.4.0 (when curl created a skill instead of a plugin) are automatically migrated:
 
 1. User runs `/push-todo connect`
-2. Setup detects "legacy" install (files in `~/.claude/skills/`)
+2. Connect detects "legacy" install (files in `~/.claude/skills/`)
 3. Update runs NEW install.sh → installs via marketplace CLI
 4. Plugin is now installed in `~/.claude/plugins/cache/`
 5. **Next run:** Claude Code uses the PLUGIN, detection returns "marketplace"

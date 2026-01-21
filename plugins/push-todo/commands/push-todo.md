@@ -144,7 +144,7 @@ Based on the project context, generate 5-10 keywords.
 
 Generate a short (5-15 words) description that captures what makes this project unique. NOT generic like "coding tasks" or "development work".
 
-### Step 4: Run Setup with Keywords
+### Step 4: Run Connect with Keywords
 
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py \
