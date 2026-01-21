@@ -41,6 +41,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config")
 # Plugin version checking
 REMOTE_PLUGIN_JSON_URL = "https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/plugins/push-todo/.claude-plugin/plugin.json"
 INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/install.sh"
+CODEX_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/codex/install-codex.sh"
 
 
 class SlowDownError(Exception):
@@ -224,6 +225,37 @@ def do_update() -> dict:
                 "command": "claude plugin update push-todo@push-todo-cli",
                 "auto_update_enabled": False,
                 "hint": "To enable auto-updates: /plugin → Marketplaces → push-todo-cli → Enable auto-update"
+            }
+
+    if method == "codex":
+        # Codex installation - re-run the Codex install script
+        try:
+            result = subprocess.run(
+                ["bash", "-c", f"curl -fsSL {CODEX_INSTALL_SCRIPT_URL} | bash"],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode == 0:
+                return {
+                    "status": "success",
+                    "message": "Codex skill updated successfully"
+                }
+            else:
+                return {
+                    "status": "failed",
+                    "message": f"Update failed: {result.stderr or 'Unknown error'}"
+                }
+        except subprocess.TimeoutExpired:
+            return {
+                "status": "failed",
+                "message": "Update timed out"
+            }
+        except Exception as e:
+            return {
+                "status": "failed",
+                "message": f"Update failed: {e}"
             }
 
     if method == "development":
@@ -664,10 +696,11 @@ def get_installation_method() -> str:
 
     Returns:
         "marketplace" - Installed via Claude Code marketplace (in ~/.claude/plugins/)
+        "codex" - Installed via Codex curl installer (in ~/.codex/skills/)
         "development" - Symlinked for development (INTERNAL USE ONLY - not a user scenario)
         "legacy" - Installed via curl (files in ~/.claude/skills/, no symlink/git)
 
-    Note: Real users install via marketplace or legacy curl. The "development"
+    Note: Real users install via marketplace, codex, or legacy curl. The "development"
     detection is purely for plugin maintainers who use symlinks for convenience.
     """
     plugin_dir = Path(__file__).parent.parent
@@ -676,6 +709,11 @@ def get_installation_method() -> str:
     # Marketplace installs are in ~/.claude/plugins/, not ~/.claude/skills/
     if ".claude/plugins" in str(plugin_dir):
         return "marketplace"
+
+    # Check if this is a Codex installation
+    # Codex installs are in ~/.codex/skills/
+    if ".codex/skills" in str(plugin_dir):
+        return "codex"
 
     # Check if it's a symlink (development setup)
     skills_path = Path.home() / ".claude" / "skills" / "push-todo"
@@ -736,6 +774,11 @@ def is_marketplace_auto_update_enabled() -> Optional[bool]:
 def show_migration_hint():
     """Show migration hint for legacy installations."""
     method = get_installation_method()
+
+    # Don't show migration hints for Codex users (they're already on the right install method)
+    if method == "codex":
+        return
+
     if method == "legacy":
         print()
         print("  " + "-" * 50)

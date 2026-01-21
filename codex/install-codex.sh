@@ -16,7 +16,11 @@ mkdir -p "$SKILLS_DIR/scripts"
 BASE_URL="https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main"
 
 echo "Downloading skill files..."
-curl -sL "$BASE_URL/codex/SKILL.md" > "$SKILLS_DIR/SKILL.md"
+# Download canonical SKILL.md and transform paths for Codex
+curl -sL "$BASE_URL/plugins/push-todo/SKILL.md" | \
+  sed 's|\${CLAUDE_PLUGIN_ROOT:-\$HOME/\.claude/skills/push-todo}|$HOME/.codex/skills/push-todo|g' \
+  > "$SKILLS_DIR/SKILL.md"
+
 curl -sL "$BASE_URL/plugins/push-todo/scripts/connect.py" > "$SKILLS_DIR/scripts/connect.py"
 curl -sL "$BASE_URL/plugins/push-todo/scripts/fetch_task.py" > "$SKILLS_DIR/scripts/fetch_task.py"
 curl -sL "$BASE_URL/plugins/push-todo/scripts/check_tasks.py" > "$SKILLS_DIR/scripts/check_tasks.py"
