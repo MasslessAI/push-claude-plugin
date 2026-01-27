@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fetch and display active Push tasks.
-Version: 4.2.0 (completion comment support)
+Version: 5.0.0 (later items excluded by default)
 
 This script retrieves active tasks from the Push iOS app and outputs them
 in a format suitable for Claude Code to process.
@@ -21,15 +21,21 @@ Tasks become visible when:
 By default, only tasks for the CURRENT PROJECT are shown (based on git remote).
 Use --all-projects to see tasks from all projects.
 
+## Later Items (v5.0.0 - 2026-01-27)
+Items marked as "later" (is_focused=true) are EXCLUDED from active fetch by default.
+These are items the user wants to defer - not work on now.
+Use --later to see only later items, or --include-later to see all items.
+
 Usage:
-    python fetch_task.py [TASK_NUMBER] [--all-projects] [--pinned] [--mark-completed TASK_ID]
+    python fetch_task.py [TASK_NUMBER] [--all-projects] [--later] [--include-later] [--mark-completed TASK_ID]
 
 Arguments:
     TASK_NUMBER        Optional task number to fetch directly (e.g., 5 or #5)
 
 Options:
     --all-projects     Fetch tasks from ALL projects (not just current)
-    --pinned           Only show pinned (focused) tasks, or prioritize them at the top
+    --later            Only show "later" items (items marked for later)
+    --include-later    Include "later" items in the active list (don't filter them out)
     --mark-completed ID Mark a task as completed (syncs back to Push)
     --completion-comment TEXT  Comment to include when marking completed (appears in Push timeline)
     --json             Output raw JSON
@@ -48,7 +54,7 @@ Output format (JSON):
                 "transcript": "Optional voice transcript",
                 "project_hint": "Optional project hint",
                 "git_remote": "Optional git remote for project scoping",
-                "is_focused": "Boolean indicating if task is pinned",
+                "is_later": "Boolean indicating if task is marked for later",
                 "created_at": "ISO timestamp"
             }
         ]
@@ -165,7 +171,7 @@ def get_api_key() -> str:
     )
 
 
-def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
+def fetch_tasks_from_api(git_remote: Optional[str] = None, later_filter: Optional[str] = None) -> List:
     """
     Fetch active tasks from the synced-todos endpoint.
 
@@ -176,6 +182,10 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
         git_remote: If provided, only fetch tasks for this project.
                    The endpoint looks up the action_id from cli_action_registrations.
                    If None, fetches ALL synced tasks across all projects.
+        later_filter: Controls "later" item filtering:
+                     - None or "exclude": Exclude later items (default for active work)
+                     - "only": Only show later items
+                     - "include": Include all items (later + active)
 
     Returns:
         List of tasks for this project, or all synced tasks if no git_remote.
@@ -183,12 +193,22 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
     api_key = get_api_key()
 
     # Build URL - with git_remote for project-scoped, without for all projects
+    params = []
     if git_remote:
         encoded_remote = urllib.parse.quote(git_remote, safe="")
-        url = f"{API_BASE_URL}/synced-todos?git_remote={encoded_remote}"
-    else:
-        # No git_remote = fetch ALL synced tasks (for --all-projects)
-        url = f"{API_BASE_URL}/synced-todos"
+        params.append(f"git_remote={encoded_remote}")
+
+    # Add later filter param
+    if later_filter == "only":
+        params.append("later_only=true")
+    elif later_filter == "include":
+        params.append("include_later=true")
+    # Default (exclude) doesn't need a param - API excludes by default
+
+    query_string = "&".join(params)
+    url = f"{API_BASE_URL}/synced-todos"
+    if query_string:
+        url = f"{url}?{query_string}"
 
     req = urllib.request.Request(url)
     req.add_header("Authorization", f"Bearer {api_key}")
@@ -208,7 +228,7 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
                     "transcript": t.get("originalTranscript"),
                     "project_hint": None,  # Not included in synced-todos response
                     "git_remote": git_remote,  # Store for reference (may be None for all-projects)
-                    "is_focused": t.get("isFocused", False),  # Pinned status
+                    "is_later": t.get("isFocused", False),  # "Later" status (renamed from pinned)
                     "created_at": t.get("createdAt"),
                 }
                 for t in todos
@@ -224,20 +244,22 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None) -> List:
         raise ValueError(f"Network error: {e.reason}")
 
 
-def get_tasks(git_remote: Optional[str] = None) -> List:
+def get_tasks(git_remote: Optional[str] = None, later_filter: Optional[str] = None) -> List:
     """
     Get tasks - always fetches fresh from API.
 
     Args:
         git_remote: If provided, fetch tasks for this project only.
                    If None, fetch ALL synced tasks across all projects.
+        later_filter: Controls "later" item filtering (see fetch_tasks_from_api).
 
     Returns:
         List of tasks from the synced-todos endpoint.
 
     Version 4.0: Removed caching - always returns fresh data from Supabase.
+    Version 5.0: Added later_filter for excluding/including "later" items.
     """
-    return fetch_tasks_from_api(git_remote)
+    return fetch_tasks_from_api(git_remote, later_filter)
 
 
 def fetch_task_by_number(display_number: int) -> Optional[dict]:
@@ -275,7 +297,7 @@ def fetch_task_by_number(display_number: int) -> Optional[dict]:
                 "transcript": t.get("originalTranscript"),
                 "project_hint": None,
                 "git_remote": None,
-                "is_focused": t.get("isFocused", False),
+                "is_later": t.get("isFocused", False),  # "Later" status (renamed from pinned)
                 "created_at": t.get("createdAt"),
             }
     except urllib.error.HTTPError as e:
@@ -334,11 +356,11 @@ def format_task_for_display(task: dict) -> str:
     """Format a task for human-readable display."""
     lines = []
 
-    # Build task header with display number and pinned indicator
+    # Build task header with display number and later indicator
     display_num = task.get("display_number")
-    pinned_prefix = "📌 " if task.get("is_focused") else ""
+    later_prefix = "⏳ " if task.get("is_later") else ""
     num_prefix = f"#{display_num} " if display_num else ""
-    lines.append(f"## Task: {num_prefix}{pinned_prefix}{task.get('summary', 'No summary')}")
+    lines.append(f"## Task: {num_prefix}{later_prefix}{task.get('summary', 'No summary')}")
     lines.append("")
 
     if task.get("project_hint"):
@@ -384,7 +406,8 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch active Push tasks")
     parser.add_argument("task_number", nargs="?", default=None, help="Task number to fetch directly (e.g., 5 or #5)")
     parser.add_argument("--all-projects", action="store_true", help="Fetch tasks from ALL projects (not just current)")
-    parser.add_argument("--pinned", action="store_true", help="Only show pinned tasks, or prioritize them at the top")
+    parser.add_argument("--later", action="store_true", help="Only show 'later' items (items marked for later)")
+    parser.add_argument("--include-later", action="store_true", help="Include 'later' items in the active list")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
     parser.add_argument("--completion-comment", metavar="TEXT", help="Comment to include when marking task completed (appears in Push app timeline)")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
@@ -427,22 +450,18 @@ def main():
         # Use --all-projects to disable project filtering
         git_remote = None if args.all_projects else get_git_remote()
 
-        # Fetch tasks (always fresh from API)
-        tasks = get_tasks(git_remote=git_remote)
+        # Determine later filter
+        # Default: exclude later items (they're not for working on now)
+        # --later: only show later items
+        # --include-later: show all items (active + later)
+        later_filter = None  # Default: exclude later items
+        if args.later:
+            later_filter = "only"
+        elif args.include_later:
+            later_filter = "include"
 
-        # Handle --pinned flag: filter to only pinned tasks, or sort pinned first
-        if args.pinned:
-            pinned_tasks = [t for t in tasks if t.get("is_focused")]
-            if pinned_tasks:
-                # If there are pinned tasks, show only those
-                tasks = pinned_tasks
-            # If no pinned tasks, fall through to show all (with pinned sorted first)
-            else:
-                # Sort to put any pinned tasks first (in case of future additions)
-                tasks = sorted(tasks, key=lambda t: (not t.get("is_focused", False)))
-        else:
-            # Always sort pinned tasks first, even without --pinned flag
-            tasks = sorted(tasks, key=lambda t: (not t.get("is_focused", False)))
+        # Fetch tasks (always fresh from API)
+        tasks = get_tasks(git_remote=git_remote, later_filter=later_filter)
 
         # Filter out tasks without display_number (required for predictable identification)
         valid_tasks = [t for t in tasks if t.get("display_number")]
@@ -452,8 +471,8 @@ def main():
         tasks = valid_tasks
 
         if not tasks:
-            if args.pinned:
-                print("No pinned tasks found.")
+            if args.later:
+                print("No 'later' tasks found.")
             elif git_remote:
                 print(f"No active tasks for this project.")
             else:
@@ -466,8 +485,9 @@ def main():
         else:
             # Show all tasks for current project (default behavior)
             scope = "this project" if git_remote else "all projects"
-            pinned_suffix = ", pinned only" if args.pinned else ""
-            print(f"# {len(tasks)} Active Tasks ({scope}{pinned_suffix})\n")
+            later_suffix = ", later only" if args.later else ""
+            include_suffix = ", including later" if args.include_later else ""
+            print(f"# {len(tasks)} Active Tasks ({scope}{later_suffix}{include_suffix})\n")
             for task in tasks:
                 display_num = task.get("display_number")
                 print(f"---\n### #{display_num}\n")
