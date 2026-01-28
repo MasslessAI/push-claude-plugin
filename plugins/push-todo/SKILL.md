@@ -87,15 +87,25 @@ Example: `/push-todo --set-batch-size 10` to queue up to 10 tasks at once.
 
 ### Internal CLI Options (Agent Use)
 ```bash
-fetch_task.py [TASK_NUMBER] [--all-projects] [--backlog] [--include-backlog] [--json] [--mark-completed ID] [--status] [--commands]
-  TASK_NUMBER           Fetch a specific task by number (e.g., 5 or #5) - fast direct lookup
-  --all-projects        Show tasks from ALL projects (not just current)
-  --backlog             Only show backlog items (deferred tasks)
-  --include-backlog     Include backlog items in the active list (by default they're excluded)
-  --json                Output raw JSON format
-  --mark-completed ID   Mark a task as completed by UUID
-  --status              Show comprehensive status (daemon, account, machine, project)
-  --commands            Show available user commands
+fetch_task.py [TASK_NUMBER] [OPTIONS]
+
+Task Selection:
+  TASK_NUMBER             Fetch a specific task by number (e.g., 5 or #5)
+  --all-projects          Show tasks from ALL projects (not just current)
+  --backlog               Only show backlog items (deferred tasks)
+  --include-backlog       Include backlog items in the active list
+
+Task Actions:
+  --mark-completed ID     Mark a task as completed by UUID
+  --completion-comment TEXT  Note to include (appears in Push app timeline)
+  --queue NUM             Queue single task for daemon (e.g., --queue 427)
+  --queue-batch NUMS      Queue multiple tasks (e.g., --queue-batch 427,351,289)
+
+Status & Settings:
+  --status                Show comprehensive status (daemon, account, machine, project)
+  --commands              Show available user commands
+  --set-batch-size N      Set max tasks for batch queue (1-20)
+  --json                  Output raw JSON format
 ```
 
 ### Backlog Items
