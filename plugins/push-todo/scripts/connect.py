@@ -38,6 +38,9 @@ from daemon_health import ensure_daemon_running
 # Project registry for global daemon routing
 from project_registry import get_registry
 
+# Machine identification for multi-Mac coordination
+from machine_id import get_machine_id, get_machine_name
+
 # Configuration
 API_BASE = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4dXpxY2JxaGlheG1maXR6eGxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU2OTY5MzQsImV4cCI6MjA1MTI3MjkzNH0.4Nm5_ABkgJCrrFc-bVzbx8qAp-SQo92HKziH7TBgspo"
@@ -108,6 +111,54 @@ def clear_config():
             os.remove(CONFIG_FILE)
         except Exception:
             pass
+
+
+# ============================================================================
+# MACHINE ID VALIDATION
+# ============================================================================
+
+def validate_machine_id() -> dict:
+    """
+    Validate and ensure machine ID exists.
+
+    This is part of the doctor flow - ensures multi-Mac coordination works.
+    The machine ID is used for:
+    - Atomic task claiming (prevents duplicate execution)
+    - Worktree naming (prevents branch conflicts)
+
+    Returns dict with:
+        - status: "valid", "created", or "error"
+        - machine_id: The machine identifier
+        - machine_name: Human-readable machine name
+    """
+    try:
+        machine_id = get_machine_id()
+        machine_name = get_machine_name()
+
+        # Check if ID was just created (file didn't exist before)
+        # get_machine_id() creates the file if missing, so we can't easily tell
+        # Instead, we just validate the format
+        if not machine_id or len(machine_id) < 5:
+            return {
+                "status": "error",
+                "machine_id": None,
+                "machine_name": machine_name,
+                "message": "Machine ID invalid or corrupted"
+            }
+
+        return {
+            "status": "valid",
+            "machine_id": machine_id,
+            "machine_name": machine_name,
+            "message": f"Machine: {machine_name}"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "machine_id": None,
+            "machine_name": None,
+            "message": f"Failed to get machine ID: {e}"
+        }
 
 
 # ============================================================================
@@ -977,6 +1028,11 @@ def main():
         help="Validate API key with backend (JSON output)"
     )
     parser.add_argument(
+        "--validate-machine",
+        action="store_true",
+        help="Validate machine ID for multi-Mac coordination (JSON output)"
+    )
+    parser.add_argument(
         "--keywords",
         type=str,
         default="",
@@ -1012,6 +1068,12 @@ def main():
             }, indent=2))
             return
         result = validate_api_key(existing_key)
+        print(json.dumps(result, indent=2))
+        return
+
+    # Handle --validate-machine flag (JSON output for agent parsing)
+    if args.validate_machine:
+        result = validate_machine_id()
         print(json.dumps(result, indent=2))
         return
 
@@ -1084,6 +1146,13 @@ def main():
                     print(f"  Local path registered: {local_path}")
                 else:
                     print(f"  Local path updated: {local_path}")
+
+            # Validate and show machine ID
+            machine_info = validate_machine_id()
+            if machine_info["status"] == "valid":
+                print(f"  Machine: {machine_info['machine_name']}")
+            else:
+                print(f"  ⚠️  Machine ID: {machine_info['message']}")
             print("  " + "=" * 40)
             print()
             if result["created"]:
@@ -1140,6 +1209,13 @@ def main():
             print(f"  Local path registered: {local_path}")
         else:
             print(f"  Local path updated: {local_path}")
+
+    # Validate and show machine ID
+    machine_info = validate_machine_id()
+    if machine_info["status"] == "valid":
+        print(f"  Machine: {machine_info['machine_name']}")
+    else:
+        print(f"  ⚠️  Machine ID: {machine_info['message']}")
     print("  " + "=" * 40)
     print()
     print("  Your iOS app will sync this automatically.")

@@ -260,7 +260,31 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.p
 
 **If `error`:** Warn user about network issue, but continue.
 
-#### Step 3: Register Project with Keywords
+#### Step 3: Validate Machine ID
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --validate-machine
+```
+
+**JSON Response:**
+```json
+{
+  "status": "valid" | "error",
+  "machine_id": "MacBook-Pro-a1b2c3d4",
+  "machine_name": "MacBook-Pro",
+  "message": "Machine: MacBook-Pro"
+}
+```
+
+The machine ID is used for:
+- **Atomic task claiming**: Prevents duplicate execution on multiple Macs
+- **Worktree naming**: Prevents branch conflicts (`push-123-a1b2c3d4`)
+
+**If `valid`:** Continue to Step 4.
+
+**If `error`:** Warn user, but continue (ID will be auto-created on daemon start).
+
+#### Step 4: Register Project with Keywords
 
 1. **Read CLAUDE.md** to understand the project context
 
