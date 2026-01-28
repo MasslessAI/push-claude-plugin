@@ -1095,195 +1095,22 @@ def show_migration_hint():
 
 
 # ============================================================================
-# PERMISSION CONFIGURATION (via PreToolUse Hooks)
+# PERMISSION CONFIGURATION - REMOVED (Does Not Work)
 # ============================================================================
 #
-# IMPORTANT: permissions.allow in settings.json does NOT work for skills/subagents!
-# This is a known bug: https://github.com/anthropics/claude-code/issues/18950
+# We attempted to implement permission auto-configuration via:
+# 1. permissions.allow patterns in settings.json - FAILED (bug #18950)
+# 2. PreToolUse hooks with permissionDecision: "allow" - FAILED (bug #6305)
 #
-# Solution: Use PreToolUse hooks with permissionDecision: "allow" to bypass
-# the permission system. The hook script is shipped with the plugin at:
-#   hooks/pretooluse-permission.sh
+# Both approaches don't work due to multiple Claude Code bugs:
+# - #18950: Skills don't inherit permissions from settings.json
+# - #6305: PreToolUse hooks don't fire at all
+# - #16598: permissionDecision: "allow" crashes Claude Code
+#
+# Users must click "Yes" or "Allow for session" when prompted.
 #
 # See: /docs/20260128_claude_code_permission_prompt_bypass_failed_experiments_and_solution.md
 # ============================================================================
-
-CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
-PUSH_HOOK_SCRIPT = "pretooluse-permission.sh"
-
-
-def check_permission_configured() -> bool:
-    """
-    Check if Push PreToolUse hook is configured in Claude Code settings.
-
-    The hook auto-approves push-todo bash commands, bypassing the broken
-    permissions.allow system (which doesn't work for skills - bug #18950).
-
-    Returns:
-        True if PreToolUse hook for push-todo is configured
-        False if not configured or file doesn't exist
-    """
-    if not CLAUDE_SETTINGS_FILE.exists():
-        return False
-
-    try:
-        settings = json.loads(CLAUDE_SETTINGS_FILE.read_text())
-        pretooluse_hooks = settings.get("hooks", {}).get("PreToolUse", [])
-
-        # Check if any PreToolUse hook references our permission script
-        for hook_config in pretooluse_hooks:
-            hooks_list = hook_config.get("hooks", [])
-            for hook in hooks_list:
-                command = hook.get("command", "")
-                if PUSH_HOOK_SCRIPT in command and "push-todo" in command:
-                    return True
-
-        return False
-    except (json.JSONDecodeError, IOError):
-        return False
-
-
-def get_hook_script_path() -> str:
-    """Get the absolute path to the PreToolUse permission hook script."""
-    # Try CLAUDE_PLUGIN_ROOT first (set by Claude Code for plugins)
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    if plugin_root:
-        return os.path.join(plugin_root, "hooks", PUSH_HOOK_SCRIPT)
-
-    # Fall back to skill location (for development symlinks)
-    skill_path = Path.home() / ".claude" / "skills" / "push-todo" / "hooks" / PUSH_HOOK_SCRIPT
-    if skill_path.exists():
-        return str(skill_path)
-
-    # Last resort: relative to this script
-    script_dir = Path(__file__).parent.parent / "hooks" / PUSH_HOOK_SCRIPT
-    return str(script_dir)
-
-
-def add_permission_to_settings() -> dict:
-    """
-    Add Push PreToolUse hook to Claude Code settings.
-
-    This hook auto-approves push-todo bash commands, working around
-    the bug where permissions.allow doesn't work for skills (#18950).
-
-    Returns dict with:
-        - status: "success", "already_configured", "error"
-        - message: Human-readable message
-    """
-    # Check if already configured
-    if check_permission_configured():
-        return {
-            "status": "already_configured",
-            "message": "Push permission hook already configured"
-        }
-
-    hook_script_path = get_hook_script_path()
-
-    try:
-        # Read existing settings or create new
-        if CLAUDE_SETTINGS_FILE.exists():
-            settings = json.loads(CLAUDE_SETTINGS_FILE.read_text())
-        else:
-            settings = {}
-
-        # Ensure hooks structure exists
-        if "hooks" not in settings:
-            settings["hooks"] = {}
-        if "PreToolUse" not in settings["hooks"]:
-            settings["hooks"]["PreToolUse"] = []
-
-        # Add our PreToolUse hook
-        settings["hooks"]["PreToolUse"].append({
-            "matcher": "Bash",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": hook_script_path,
-                    "timeout": 5
-                }
-            ]
-        })
-
-        # Write back (pretty-printed for readability)
-        CLAUDE_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CLAUDE_SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
-
-        return {
-            "status": "success",
-            "message": "Permission hook saved to ~/.claude/settings.json"
-        }
-
-    except IOError as e:
-        return {
-            "status": "error",
-            "message": f"Failed to write settings: {e}"
-        }
-    except json.JSONDecodeError as e:
-        return {
-            "status": "error",
-            "message": f"Invalid JSON in settings file: {e}"
-        }
-
-
-def configure_permissions_interactive() -> dict:
-    """
-    Interactive permission configuration for connect flow.
-
-    Shows user what will be added and asks for consent.
-
-    Returns dict with:
-        - status: "success", "already_configured", "skipped", "error"
-        - message: Human-readable message
-    """
-    # Check if already configured
-    if check_permission_configured():
-        return {
-            "status": "already_configured",
-            "message": "Push permission hook already configured"
-        }
-
-    hook_script_path = get_hook_script_path()
-
-    # Show what we're doing
-    print()
-    print("  Configure Permissions")
-    print("  " + "-" * 40)
-    print()
-    print("  To avoid permission prompts in future sessions,")
-    print("  I can add a PreToolUse hook to auto-approve Push commands.")
-    print()
-    print(f"  Hook: {hook_script_path}")
-    print(f"  File: ~/.claude/settings.json")
-    print()
-
-    # Get user consent
-    try:
-        response = input("  Save permission hook? [Y]es / [N]o: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return {"status": "skipped", "message": "User cancelled"}
-
-    if response in ("y", "yes", ""):
-        result = add_permission_to_settings()
-
-        if result["status"] == "success":
-            print()
-            print("  ✓ Permission hook saved!")
-            print("  ✓ No more prompts for Push commands.")
-            print("  ✓ Restart Claude Code for changes to take effect.")
-        elif result["status"] == "error":
-            print()
-            print(f"  ⚠ Could not save: {result['message']}")
-            print("  You can add manually to ~/.claude/settings.json")
-
-        return result
-
-    print()
-    print("  Skipped. You'll see prompts each session.")
-    print("  Run '/push-todo connect' anytime to configure.")
-
-    return {"status": "skipped", "message": "User declined"}
 
 
 # ============================================================================
@@ -1349,16 +1176,9 @@ def main():
         default="",
         help="Short description of the project (generated by agent)"
     )
-    parser.add_argument(
-        "--check-permissions",
-        action="store_true",
-        help="Check if Claude Code permissions are configured (JSON output)"
-    )
-    parser.add_argument(
-        "--configure-permissions",
-        action="store_true",
-        help="Add Push permissions to Claude Code settings (non-interactive)"
-    )
+    # NOTE: Permission configuration flags removed - they don't work due to
+    # multiple Claude Code bugs (#18950, #6305). See:
+    # /docs/20260128_claude_code_permission_prompt_bypass_failed_experiments_and_solution.md
     args = parser.parse_args()
 
     # Handle --check-version flag (JSON output for agent parsing)
@@ -1401,23 +1221,6 @@ def main():
     # Handle --status flag (show status and exit)
     if args.status:
         show_status()
-        return
-
-    # Handle --check-permissions flag (JSON output for agent parsing)
-    if args.check_permissions:
-        configured = check_permission_configured()
-        print(json.dumps({
-            "configured": configured,
-            "hook_script": PUSH_HOOK_SCRIPT,
-            "hook_path": get_hook_script_path(),
-            "settings_file": str(CLAUDE_SETTINGS_FILE)
-        }, indent=2))
-        return
-
-    # Handle --configure-permissions flag (non-interactive)
-    if args.configure_permissions:
-        result = add_permission_to_settings()
-        print(json.dumps(result, indent=2))
         return
 
     # Auto-detect client type from installation method if not explicitly specified

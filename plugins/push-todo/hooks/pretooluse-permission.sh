@@ -13,8 +13,16 @@
 # See: /docs/20260128_claude_code_permission_prompt_bypass_failed_experiments_and_solution.md
 #
 
+# Debug log file
+DEBUG_LOG="$HOME/.push/pretooluse-hook-debug.log"
+mkdir -p "$(dirname "$DEBUG_LOG")"
+
 # Read JSON input from stdin
 INPUT=$(cat)
+
+# Log the input for debugging
+echo "$(date): Hook called" >> "$DEBUG_LOG"
+echo "INPUT: $INPUT" >> "$DEBUG_LOG"
 
 # Extract tool name and command using Python (more reliable than jq for edge cases)
 read -r TOOL_NAME COMMAND <<< $(python3 -c "
@@ -34,8 +42,13 @@ if [ "$TOOL_NAME" != "Bash" ]; then
     exit 0
 fi
 
+# Log extracted values
+echo "TOOL_NAME: $TOOL_NAME" >> "$DEBUG_LOG"
+echo "COMMAND: $COMMAND" >> "$DEBUG_LOG"
+
 # Check if command contains push-todo (case-insensitive check for the path)
 if [[ "$COMMAND" == *"push-todo"* ]]; then
+    echo "DECISION: ALLOW (contains push-todo)" >> "$DEBUG_LOG"
     # Return JSON to auto-approve this command
     cat << 'EOF'
 {
@@ -50,4 +63,5 @@ EOF
 fi
 
 # For non-push-todo commands, let normal permission flow proceed
+echo "DECISION: PASS (no push-todo)" >> "$DEBUG_LOG"
 exit 0

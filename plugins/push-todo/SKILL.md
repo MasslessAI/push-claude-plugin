@@ -447,50 +447,15 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.p
   --description "Voice-powered todo app for iOS with realtime sync"
 ```
 
-#### Step 6: Configure Permissions (Auto-Heal via PreToolUse Hook)
-
-Check if Claude Code PreToolUse hook is configured to auto-approve Push commands.
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --check-permissions
-```
-
-**JSON Response:**
-```json
-{
-  "configured": true | false,
-  "hook_script": "pretooluse-permission.sh",
-  "hook_path": "/path/to/hooks/pretooluse-permission.sh",
-  "settings_file": "~/.claude/settings.json"
-}
-```
-
-**If `configured: false`:**
-1. Tell the user: "To avoid permission prompts in future sessions, I can add a PreToolUse hook to auto-approve Push commands."
-2. Show the hook that will be added
-3. Ask for confirmation: "Save permission hook? (yes/no)"
-4. If confirmed, run:
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --configure-permissions
-   ```
-5. Confirm success: "Permission hook saved. Restart Claude Code for changes to take effect."
-
-**If `configured: true`:** Skip silently (already configured).
-
-**Why PreToolUse hooks instead of permissions.allow:**
-- Claude Code's `permissions.allow` in settings.json does NOT work for skills/subagents (bug #18950)
-- PreToolUse hooks with `permissionDecision: "allow"` bypass the permission system entirely
-- This is the documented workaround until the bug is fixed
-- See: `/docs/20260128_claude_code_permission_prompt_bypass_failed_experiments_and_solution.md`
-
 ### Why This Matters
 
 - **Version check:** Ensures users have latest bug fixes
 - **API validation:** Catches revoked keys before tasks fail
 - **Keywords:** Help AI route voice tasks to the correct project
-- **Permissions:** Eliminates per-session permission prompts (auto-heal)
 
 Users only need to remember one command: `/push-todo connect`
+
+> **Note on Permission Prompts:** Claude Code will prompt for permission when running push-todo commands. This is unavoidable due to multiple Claude Code bugs (#18950, #6305). Click "Yes" or "Allow for session" when prompted.
 
 ## Task Fields
 
