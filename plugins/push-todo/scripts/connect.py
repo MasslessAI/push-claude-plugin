@@ -1099,7 +1099,7 @@ def show_migration_hint():
 # ============================================================================
 
 CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
-PUSH_PERMISSION_PATTERN = "Bash(python3 *push-todo*)"
+PUSH_PERMISSION_PATTERN = "Bash(*python3*push-todo*)"
 
 
 def check_permission_configured() -> bool:
