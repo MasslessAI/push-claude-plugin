@@ -150,21 +150,21 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_tas
 
 Note: The script reads the API key from `~/.config/push/config` automatically.
 
-This returns all active tasks for the current project (backlog items excluded by default). Present them using the **global display number** (same as shown in the Push app):
+This returns all active tasks for the current project. Present them in a clean table format:
 
 ```
-You have N active tasks from Push:
+You have N active tasks for this project:
 
-#427 **[Summary]**
-   Details: [First 200 chars of content]
-
-#351 **[Summary]**
-   Details: ...
-
-Which task would you like to work on? (Use #N to reference, e.g., /push-todo 427)
+| #   | Task                          | Project |
+|-----|-------------------------------|---------|
+| 427 | Add dark mode toggle          | Push    |
+| 351 | Fix sync race condition       | Push    |
+| 289 | Update login flow             | Push    |
 ```
 
 **IMPORTANT:** Always reference tasks by their global number (`#427`, `#351`, etc.), never by relative position (1st, 2nd). This ensures consistency between the Push app and Claude Code.
+
+For pinned tasks, add 📌 before the task summary.
 
 ## Batch Queue Offer (Proactive Prompt)
 
@@ -198,12 +198,20 @@ The daemon will process them automatically while you do other things.
 
 **If user says yes** (any affirmative: "yes", "y", "sure", "do it", "queue them"):
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" \
-  --queue-batch 427,351,289,245,198
-```
+1. **Queue the tasks:**
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" \
+     --queue-batch 427,351,289,245,198
+   ```
+
+2. **Immediately show daemon status** (so user sees tasks are running):
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" --watch
+   ```
 
 Use the exact task numbers from `BATCH_TASKS` in the output.
+
+**IMPORTANT:** Always show watch status after queuing - users want immediate confirmation that tasks are being processed. This is automatic, don't ask.
 
 **If user says no** or wants to work on a specific task, proceed normally.
 
