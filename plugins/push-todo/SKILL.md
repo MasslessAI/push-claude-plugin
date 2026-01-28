@@ -69,6 +69,14 @@ This ensures you always see the latest state from the Push app.
 | `/push-todo review` | Check completed work against git activity |
 | `/push-todo status` | Show connection status (daemon, account, machine, project) |
 
+### Settings (Pro Users)
+
+| Command | Description |
+|---------|-------------|
+| `--set-batch-size N` | Set max tasks for batch queue (1-20, default 5) |
+
+Example: `/push-todo --set-batch-size 10` to queue up to 10 tasks at once.
+
 ### Options
 
 | Option | Description |
@@ -140,6 +148,47 @@ Which task would you like to work on? (Use #N to reference, e.g., /push-todo 427
 ```
 
 **IMPORTANT:** Always reference tasks by their global number (`#427`, `#351`, etc.), never by relative position (1st, 2nd). This ensures consistency between the Push app and Claude Code.
+
+## Batch Queue Offer (Proactive Prompt)
+
+When listing tasks, the script outputs a `BATCH_OFFER` section at the end. The number of tasks offered is configurable via `--set-batch-size` (default: 5, max: 20).
+
+```
+==================================================
+BATCH_OFFER: 5
+BATCH_TASKS: 427,351,289,245,198
+  #427 - Add dark mode toggle
+  #351 - Fix sync race condition
+  #289 - Update login flow
+  #245 - Add unit tests for auth
+  #198 - Refactor API client
+==================================================
+```
+
+**When you see this offer, ALWAYS ask the user proactively:**
+
+```
+Would you like to queue all 5 tasks for background execution?
+
+  #427 - Add dark mode toggle
+  #351 - Fix sync race condition
+  #289 - Update login flow
+  #245 - Add unit tests for auth
+  #198 - Refactor API client
+
+The daemon will process them automatically while you do other things.
+```
+
+**If user says yes** (any affirmative: "yes", "y", "sure", "do it", "queue them"):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" \
+  --queue-batch 427,351,289,245,198
+```
+
+Use the exact task numbers from `BATCH_TASKS` in the output.
+
+**If user says no** or wants to work on a specific task, proceed normally.
 
 ## Starting a Task
 

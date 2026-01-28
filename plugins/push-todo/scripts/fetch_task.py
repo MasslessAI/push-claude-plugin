@@ -87,6 +87,70 @@ from machine_id import get_machine_id, get_machine_name
 
 # Configuration
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
+DEFAULT_MAX_BATCH_SIZE = 5
+
+
+def get_max_batch_size() -> int:
+    """
+    Get the maximum batch size from config file.
+
+    Reads PUSH_MAX_BATCH_SIZE from ~/.config/push/config.
+    Defaults to 5 if not configured.
+
+    Returns:
+        Maximum number of tasks to offer for batch queue.
+    """
+    config_path = Path.home() / ".config" / "push" / "config"
+    if config_path.exists():
+        try:
+            for line in config_path.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("export PUSH_MAX_BATCH_SIZE="):
+                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return int(value)
+        except (ValueError, Exception):
+            pass
+    return DEFAULT_MAX_BATCH_SIZE
+
+
+def set_max_batch_size(size: int) -> bool:
+    """
+    Set the maximum batch size in config file.
+
+    Args:
+        size: New batch size (must be 1-20)
+
+    Returns:
+        True if successful, False otherwise.
+    """
+    if size < 1 or size > 20:
+        return False
+
+    config_path = Path.home() / ".config" / "push" / "config"
+
+    # Read existing config
+    lines = []
+    if config_path.exists():
+        lines = config_path.read_text().splitlines()
+
+    # Update or add PUSH_MAX_BATCH_SIZE
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("export PUSH_MAX_BATCH_SIZE="):
+            lines[i] = f'export PUSH_MAX_BATCH_SIZE="{size}"'
+            found = True
+            break
+
+    if not found:
+        lines.append(f'export PUSH_MAX_BATCH_SIZE="{size}"')
+
+    # Write back
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("\n".join(lines) + "\n")
+        return True
+    except Exception:
+        return False
 
 
 def get_git_remote() -> Optional[str]:
@@ -458,6 +522,8 @@ def main():
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
     parser.add_argument("--completion-comment", metavar="TEXT", help="Comment to include when marking task completed (appears in Push app timeline)")
     parser.add_argument("--queue", metavar="NUM", help="Queue a task for background execution (e.g., --queue 427)")
+    parser.add_argument("--queue-batch", metavar="NUMS", help="Queue multiple tasks (comma-separated: --queue-batch 427,351,289)")
+    parser.add_argument("--set-batch-size", metavar="N", type=int, help="Set max tasks for batch queue (1-20, default 5)")
     parser.add_argument("--daemon-status", action="store_true", help="Show daemon status")
     parser.add_argument("--status", action="store_true", help="Show comprehensive status (daemon, connection, project)")
     parser.add_argument("--commands", action="store_true", help="Show available user commands")
@@ -468,6 +534,18 @@ def main():
     ensure_daemon_running()
 
     try:
+        # Handle --set-batch-size (pro user setting)
+        if args.set_batch_size is not None:
+            if args.set_batch_size < 1 or args.set_batch_size > 20:
+                print("Batch size must be between 1 and 20", file=sys.stderr)
+                sys.exit(1)
+            if set_max_batch_size(args.set_batch_size):
+                print(f"Max batch size set to {args.set_batch_size}")
+            else:
+                print("Failed to update config", file=sys.stderr)
+                sys.exit(1)
+            return
+
         # Handle --commands (simple help for users)
         if args.commands:
             print()
@@ -575,6 +653,10 @@ def main():
             except Exception:
                 pass
 
+            # Batch settings
+            batch_size = get_max_batch_size()
+            print(f"  Batch size: {batch_size} tasks")
+
             print("  " + "=" * 40)
             print()
             return
@@ -605,6 +687,42 @@ def main():
                 print("Daemon will pick it up shortly.")
             else:
                 print(f"Failed to queue task #{display_num}", file=sys.stderr)
+                sys.exit(1)
+            return
+
+        # Handle --queue-batch (queue multiple tasks at once)
+        if args.queue_batch:
+            # Parse comma-separated task numbers
+            task_nums_str = args.queue_batch.split(",")
+            task_nums = []
+            for num_str in task_nums_str:
+                num = parse_task_number(num_str.strip())
+                if num is None:
+                    print(f"Invalid task number: {num_str.strip()}", file=sys.stderr)
+                    sys.exit(1)
+                task_nums.append(num)
+
+            if not task_nums:
+                print("No valid task numbers provided", file=sys.stderr)
+                sys.exit(1)
+
+            # Queue each task
+            print(f"Queueing {len(task_nums)} tasks for background execution...")
+            print()
+            success_count = 0
+            for num in task_nums:
+                success = queue_task(num)
+                if success:
+                    print(f"  #{num} queued")
+                    success_count += 1
+                else:
+                    print(f"  #{num} FAILED", file=sys.stderr)
+
+            print()
+            if success_count == len(task_nums):
+                print(f"All {success_count} tasks queued. Daemon will process them automatically.")
+            else:
+                print(f"{success_count}/{len(task_nums)} tasks queued.", file=sys.stderr)
                 sys.exit(1)
             return
 
@@ -687,6 +805,20 @@ def main():
                 print(f"---\n### #{display_num}\n")
                 print(format_task_for_display(task))
                 print()
+
+            # Batch queue offer - only show for active tasks (not backlog view)
+            if not args.backlog and len(tasks) > 0:
+                max_batch = get_max_batch_size()
+                batch_count = min(len(tasks), max_batch)
+                batch_tasks = tasks[:batch_count]
+                batch_numbers = [str(t.get("display_number")) for t in batch_tasks]
+
+                print("=" * 50)
+                print(f"BATCH_OFFER: {batch_count}")
+                print(f"BATCH_TASKS: {','.join(batch_numbers)}")
+                for t in batch_tasks:
+                    print(f"  #{t.get('display_number')} - {t.get('summary', 'No summary')[:50]}")
+                print("=" * 50)
 
         sys.exit(0)
 
