@@ -21,25 +21,27 @@ DAEMON_SCRIPT = Path(__file__).parent / "daemon.py"
 DAEMON_PID = Path.home() / ".push" / "daemon.pid"
 DAEMON_LOG = Path.home() / ".push" / "daemon.log"
 DAEMON_VERSION_FILE = Path.home() / ".push" / "daemon.version"
+PLUGIN_JSON = Path(__file__).parent.parent / ".claude-plugin" / "plugin.json"
 
-# Import daemon version for comparison
-EXPECTED_DAEMON_VERSION = None
-try:
-    # Parse DAEMON_VERSION from daemon.py without executing it
-    with open(DAEMON_SCRIPT, "r") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("DAEMON_VERSION") and "=" in line:
-                # Parse: DAEMON_VERSION = "2.0.0"  # comment
-                value_part = line.split("=", 1)[1].strip()
-                # Remove inline comment if present
-                if "#" in value_part:
-                    value_part = value_part.split("#")[0].strip()
-                # Extract the quoted string
-                EXPECTED_DAEMON_VERSION = value_part.strip('"').strip("'")
-                break
-except Exception:
-    pass
+
+def get_plugin_version() -> Optional[str]:
+    """
+    Get version from plugin.json (single source of truth).
+
+    Returns:
+        Version string (e.g., "1.7.2") or None if not found
+    """
+    try:
+        import json
+        with open(PLUGIN_JSON, "r") as f:
+            data = json.load(f)
+            return data.get("version")
+    except Exception:
+        return None
+
+
+# Expected version comes from plugin.json
+EXPECTED_DAEMON_VERSION = get_plugin_version()
 
 # Check if global mode is available
 _script_dir = str(Path(__file__).parent)

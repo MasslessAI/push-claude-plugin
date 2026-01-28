@@ -62,10 +62,6 @@ except ImportError:
 
 # ==================== Configuration ====================
 
-# Daemon version - increment this when making breaking changes
-# that require daemon restart (e.g., new features, bug fixes)
-DAEMON_VERSION = "2.0.0"  # 2.0.0 = Global mode with machine-specific worktrees
-
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 POLL_INTERVAL = 30  # seconds
 
@@ -107,6 +103,22 @@ PID_FILE = Path.home() / ".push" / "daemon.pid"
 LOG_FILE = Path.home() / ".push" / "daemon.log"
 VERSION_FILE = Path.home() / ".push" / "daemon.version"
 CONFIG_FILE = Path.home() / ".config" / "push" / "config"
+PLUGIN_JSON = Path(__file__).parent.parent / ".claude-plugin" / "plugin.json"
+
+
+def get_plugin_version() -> str:
+    """
+    Get version from plugin.json (single source of truth).
+
+    Returns:
+        Version string (e.g., "1.7.2") or "unknown" if not found
+    """
+    try:
+        with open(PLUGIN_JSON, "r") as f:
+            data = json.load(f)
+            return data.get("version", "unknown")
+    except Exception:
+        return "unknown"
 
 # Track running tasks to avoid duplicates
 running_tasks: Dict[int, subprocess.Popen] = {}
@@ -794,9 +806,9 @@ def main():
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write PID file and version file
+    # Write PID file and version file (version from plugin.json)
     PID_FILE.write_text(str(os.getpid()))
-    VERSION_FILE.write_text(DAEMON_VERSION)
+    VERSION_FILE.write_text(get_plugin_version())
 
     log("=" * 60)
     if GLOBAL_MODE_ENABLED:
