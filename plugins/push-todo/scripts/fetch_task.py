@@ -527,6 +527,8 @@ def main():
     parser.add_argument("--daemon-status", action="store_true", help="Show daemon status")
     parser.add_argument("--status", action="store_true", help="Show comprehensive status (daemon, connection, project)")
     parser.add_argument("--commands", action="store_true", help="Show available user commands")
+    parser.add_argument("--watch", action="store_true", help="Live monitor daemon task execution")
+    parser.add_argument("--follow", "-f", action="store_true", help="With --watch: exit when all tasks complete")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     args = parser.parse_args()
 
@@ -546,6 +548,19 @@ def main():
                 sys.exit(1)
             return
 
+        # Handle --watch (live monitoring)
+        if args.watch:
+            import subprocess as sp
+            watch_script = Path(__file__).parent / "watch.py"
+            cmd = [sys.executable, str(watch_script)]
+            if args.follow:
+                cmd.append("--follow")
+            try:
+                sp.run(cmd)
+            except KeyboardInterrupt:
+                pass
+            return
+
         # Handle --commands (simple help for users)
         if args.commands:
             print()
@@ -557,6 +572,7 @@ def main():
             print("  /push-todo connect      Setup or fix problems")
             print("  /push-todo review       Check completed work")
             print("  /push-todo status       Show connection status")
+            print("  /push-todo watch        Live monitor daemon tasks")
             print()
             print("  Options:")
             print("  --all-projects          See tasks from all projects")

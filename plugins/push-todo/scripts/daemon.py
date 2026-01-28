@@ -102,6 +102,7 @@ CERTAINTY_LOW_THRESHOLD = 0.4   # < 0.4: Request clarification
 PID_FILE = Path.home() / ".push" / "daemon.pid"
 LOG_FILE = Path.home() / ".push" / "daemon.log"
 VERSION_FILE = Path.home() / ".push" / "daemon.version"
+STATUS_FILE = Path.home() / ".push" / "daemon_status.json"
 CONFIG_FILE = Path.home() / ".config" / "push" / "config"
 PLUGIN_JSON = Path(__file__).parent.parent / ".claude-plugin" / "plugin.json"
 
@@ -123,6 +124,15 @@ def get_plugin_version() -> str:
 # Track running tasks to avoid duplicates
 running_tasks: Dict[int, subprocess.Popen] = {}
 
+# Track task details for status reporting (display_num -> task_info)
+task_details: Dict[int, Dict[str, Any]] = {}
+
+# Track completed tasks today (for status display)
+completed_today: List[Dict[str, Any]] = []
+
+# Daemon start time
+daemon_start_time: Optional[datetime] = None
+
 
 # ==================== Logging ====================
 
@@ -136,6 +146,89 @@ def log(message: str):
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def write_status_file():
+    """
+    Write current daemon status to JSON file for live monitoring.
+
+    This file is read by `/push-todo watch` to show real-time status.
+    Updates on every poll cycle and when task status changes.
+    """
+    global daemon_start_time
+
+    try:
+        now = datetime.now()
+
+        # Build active tasks list
+        active_tasks = []
+        for display_num, proc in running_tasks.items():
+            task_info = task_details.get(display_num, {})
+            started_at = task_info.get("started_at")
+            elapsed = 0
+            if started_at:
+                elapsed = int((now - started_at).total_seconds())
+
+            active_tasks.append({
+                "display_number": display_num,
+                "task_id": task_info.get("task_id", ""),
+                "summary": task_info.get("summary", "Unknown task"),
+                "status": "running",
+                "phase": task_info.get("phase", "executing"),
+                "detail": task_info.get("detail", "Running Claude..."),
+                "started_at": started_at.isoformat() if started_at else None,
+                "elapsed_seconds": elapsed
+            })
+
+        # Build queued tasks (from task_details with status=queued)
+        for display_num, info in task_details.items():
+            if display_num not in running_tasks and info.get("status") == "queued":
+                active_tasks.append({
+                    "display_number": display_num,
+                    "task_id": info.get("task_id", ""),
+                    "summary": info.get("summary", "Unknown task"),
+                    "status": "queued",
+                    "queued_at": info.get("queued_at").isoformat() if info.get("queued_at") else None
+                })
+
+        # Sort: running first, then queued
+        active_tasks.sort(key=lambda t: (0 if t["status"] == "running" else 1, t["display_number"]))
+
+        status = {
+            "daemon": {
+                "pid": os.getpid(),
+                "version": get_plugin_version(),
+                "started_at": daemon_start_time.isoformat() if daemon_start_time else None,
+                "machine_name": get_machine_name() if GLOBAL_MODE_ENABLED and get_machine_name else None,
+                "machine_id": get_machine_id()[-8:] if GLOBAL_MODE_ENABLED and get_machine_id else None
+            },
+            "active_tasks": active_tasks,
+            "completed_today": completed_today[-10:],  # Last 10 completed
+            "stats": {
+                "running": len(running_tasks),
+                "max_concurrent": MAX_CONCURRENT_TASKS,
+                "completed_today": len(completed_today)
+            },
+            "last_updated": now.isoformat()
+        }
+
+        # Write atomically (write to temp, then rename)
+        temp_file = STATUS_FILE.with_suffix(".tmp")
+        with open(temp_file, "w") as f:
+            json.dump(status, f, indent=2)
+        temp_file.replace(STATUS_FILE)
+
+    except Exception as e:
+        # Don't let status file errors break the daemon
+        pass
+
+
+def update_task_detail(display_num: int, **kwargs):
+    """Update task details for status reporting."""
+    if display_num not in task_details:
+        task_details[display_num] = {}
+    task_details[display_num].update(kwargs)
+    write_status_file()
 
 
 # ==================== Configuration ====================
@@ -586,6 +679,20 @@ def execute_task(task: Dict):
         # Another machine claimed it, skip
         return
 
+    # Track task details for status reporting
+    task_id = task.get("id") or task.get("todo_id") or ""
+    summary = task.get("summary") or content[:50]
+    update_task_detail(
+        display_num,
+        task_id=task_id,
+        summary=summary,
+        status="running",
+        phase="analyzing",
+        detail="Analyzing task certainty...",
+        started_at=datetime.now(),
+        git_remote=git_remote
+    )
+
     log(f"Analyzing task #{display_num}: {content[:60]}...")
 
     # Analyze certainty to determine execution mode
@@ -687,7 +794,15 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
         running_tasks[display_num] = proc
         task_project_paths[display_num] = project_path
 
+        # Update task detail for status reporting
         mode_desc = "planning mode" if execution_mode == "planning" else "standard mode"
+        update_task_detail(
+            display_num,
+            phase="executing",
+            detail=f"Running Claude in {mode_desc}...",
+            claude_pid=proc.pid
+        )
+
         log(f"Started Claude for task #{display_num} in {mode_desc} (PID: {proc.pid})")
 
     except Exception as e:
@@ -755,23 +870,49 @@ def check_running_tasks():
             # Process completed
             completed.append(display_num)
 
+            # Get task info for completed_today tracking
+            task_info = task_details.get(display_num, {})
+            started_at = task_info.get("started_at")
+            duration = 0
+            if started_at:
+                duration = int((datetime.now() - started_at).total_seconds())
+
             if retcode == 0:
                 log(f"Task #{display_num} completed (Claude exited cleanly)")
-                # SessionEnd hook should have already reported completion
-                # But we'll set a fallback summary just in case
-                # update_task_status(display_num, "completed", summary="Completed via daemon")
+                # Track in completed_today
+                completed_today.append({
+                    "display_number": display_num,
+                    "summary": task_info.get("summary", "Unknown task"),
+                    "completed_at": datetime.now().isoformat(),
+                    "duration_seconds": duration,
+                    "status": "completed"
+                })
             else:
                 log(f"Task #{display_num} failed (Claude exit code: {retcode})")
                 stderr = proc.stderr.read() if proc.stderr else ""
                 update_task_status(display_num, "failed", error=f"Exit code {retcode}: {stderr[:200]}")
+                # Track in completed_today as failed
+                completed_today.append({
+                    "display_number": display_num,
+                    "summary": task_info.get("summary", "Unknown task"),
+                    "completed_at": datetime.now().isoformat(),
+                    "duration_seconds": duration,
+                    "status": "failed"
+                })
 
     # Remove completed tasks from tracking and clean up worktrees
     for display_num in completed:
         del running_tasks[display_num]
+        # Remove from task_details
+        task_details.pop(display_num, None)
 
         # Clean up worktree
         project_path = task_project_paths.pop(display_num, None)
         cleanup_worktree(display_num, project_path)
+
+    # Update status file if any tasks completed
+    if completed:
+        write_status_file()
 
 
 # ==================== Signal Handling ====================
@@ -785,9 +926,10 @@ def cleanup(signum, frame):
         log(f"Terminating task #{display_num}")
         proc.terminate()
 
-    # Remove PID file
+    # Remove PID file and status file
     try:
         PID_FILE.unlink(missing_ok=True)
+        STATUS_FILE.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -798,6 +940,8 @@ def cleanup(signum, frame):
 
 def main():
     """Main daemon loop."""
+    global daemon_start_time
+
     # Set up signal handlers
     signal.signal(signal.SIGTERM, cleanup)
     signal.signal(signal.SIGINT, cleanup)
@@ -809,6 +953,9 @@ def main():
     # Write PID file and version file (version from plugin.json)
     PID_FILE.write_text(str(os.getpid()))
     VERSION_FILE.write_text(get_plugin_version())
+
+    # Track daemon start time
+    daemon_start_time = datetime.now()
 
     log("=" * 60)
     if GLOBAL_MODE_ENABLED:
@@ -867,6 +1014,9 @@ def main():
                     execute_task(task)
             elif len(running_tasks) > 0:
                 log(f"No new tasks. {len(running_tasks)} task(s) running.")
+
+            # Update status file for live monitoring
+            write_status_file()
 
         except KeyboardInterrupt:
             cleanup(None, None)
