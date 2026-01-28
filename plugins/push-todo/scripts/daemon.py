@@ -9,9 +9,16 @@ Architecture:
 - Git branch = worktree = Claude session (1:1:1 mapping)
 - Uses Claude's --continue to resume sessions in worktrees
 - SessionEnd hook reports completion (no wrapper script needed)
+- Certainty analysis determines execution mode (immediate, planning, or clarify)
+
+Certainty-Based Execution:
+- High certainty (>= 0.7): Execute immediately in standard mode
+- Medium certainty (0.4-0.7): Execute with --plan flag (planning mode first)
+- Low certainty (< 0.4): Update todo with clarification questions, skip execution
 
 See: /docs/20260127_parallel_task_execution_research.md
 See: /docs/20260127_parallel_task_execution_implementation_plan.md
+See: /docs/20260127_certainty_based_execution_architecture.md
 """
 
 import json
@@ -27,11 +34,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+# Import certainty analyzer for task evaluation
+# Add script directory to path since daemon runs from git repo, not scripts dir
+_script_dir = str(Path(__file__).parent)
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
+
+try:
+    from certainty_analyzer import CertaintyAnalyzer, CertaintyLevel, CertaintyAnalysis
+    CERTAINTY_ENABLED = True
+except ImportError:
+    CERTAINTY_ENABLED = False
+    CertaintyAnalyzer = None
+    CertaintyLevel = None
+    CertaintyAnalysis = None
+
 # ==================== Configuration ====================
 
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 POLL_INTERVAL = 30  # seconds
 MAX_CONCURRENT_TASKS = 3  # Max parallel Claude sessions
+
+# Certainty thresholds
+CERTAINTY_HIGH_THRESHOLD = 0.7   # >= 0.7: Execute immediately
+CERTAINTY_LOW_THRESHOLD = 0.4   # < 0.4: Request clarification
 
 PID_FILE = Path.home() / ".push" / "daemon.pid"
 LOG_FILE = Path.home() / ".push" / "daemon.log"
@@ -147,7 +173,9 @@ def update_task_status(
     display_number: int,
     status: str,
     summary: Optional[str] = None,
-    error: Optional[str] = None
+    error: Optional[str] = None,
+    certainty_score: Optional[float] = None,
+    clarification_questions: Optional[List[Dict]] = None
 ):
     """Update task execution status via edge function."""
     payload: Dict[str, Any] = {
@@ -158,6 +186,10 @@ def update_task_status(
         payload["summary"] = summary
     if error:
         payload["error"] = error
+    if certainty_score is not None:
+        payload["certaintyScore"] = certainty_score
+    if clarification_questions:
+        payload["clarificationQuestions"] = clarification_questions
 
     result = api_request("update-task-execution", method="PATCH", data=payload)
     if result and result.get("success"):
@@ -184,6 +216,67 @@ def fetch_queued_tasks() -> List[Dict]:
     if result:
         return result.get("todos", [])
     return []
+
+
+# ==================== Certainty Analysis ====================
+
+def analyze_task_certainty(task: Dict) -> Optional[CertaintyAnalysis]:
+    """
+    Analyze task content to determine execution certainty.
+
+    Returns:
+        CertaintyAnalysis if certainty module available, None otherwise
+    """
+    if not CERTAINTY_ENABLED or CertaintyAnalyzer is None:
+        log("Certainty analysis not available, executing directly")
+        return None
+
+    content = (
+        task.get("normalizedContent") or
+        task.get("normalized_content") or
+        task.get("summary") or
+        ""
+    )
+    summary = task.get("summary")
+    transcript = task.get("originalTranscript") or task.get("original_transcript")
+
+    try:
+        analyzer = CertaintyAnalyzer()
+        analysis = analyzer.analyze(content, summary, transcript)
+
+        display_num = task.get("displayNumber") or task.get("display_number")
+        log(f"Task #{display_num} certainty: {analysis.score:.2f} ({analysis.level.value})")
+
+        if analysis.reasons:
+            for reason in analysis.reasons[:3]:  # Log top 3 reasons
+                log(f"  - {reason.factor}: {reason.explanation}")
+
+        return analysis
+
+    except Exception as e:
+        log(f"Certainty analysis failed: {e}")
+        return None
+
+
+def get_execution_mode(analysis: Optional[CertaintyAnalysis]) -> str:
+    """
+    Determine execution mode based on certainty analysis.
+
+    Returns:
+        "immediate" - Execute without planning
+        "planning" - Execute with --plan flag first
+        "clarify" - Request clarification, don't execute
+    """
+    if analysis is None:
+        # No analysis available, default to immediate execution
+        return "immediate"
+
+    if analysis.score >= CERTAINTY_HIGH_THRESHOLD:
+        return "immediate"
+    elif analysis.score >= CERTAINTY_LOW_THRESHOLD:
+        return "planning"
+    else:
+        return "clarify"
 
 
 # ==================== Task Execution ====================
@@ -235,7 +328,7 @@ def create_worktree(display_number: int) -> bool:
 
 
 def execute_task(task: Dict):
-    """Create worktree and run Claude for a task."""
+    """Create worktree and run Claude for a task with certainty-based execution mode."""
     display_num = task.get("displayNumber") or task.get("display_number")
     content = (
         task.get("normalizedContent") or
@@ -256,10 +349,46 @@ def execute_task(task: Dict):
         log(f"Max concurrent tasks ({MAX_CONCURRENT_TASKS}) reached, skipping #{display_num}")
         return
 
-    log(f"Starting task #{display_num}: {content[:60]}...")
+    log(f"Analyzing task #{display_num}: {content[:60]}...")
+
+    # Analyze certainty to determine execution mode
+    analysis = analyze_task_certainty(task)
+    execution_mode = get_execution_mode(analysis)
+
+    log(f"Task #{display_num} execution mode: {execution_mode}")
+
+    # Handle low-certainty tasks - request clarification instead of executing
+    if execution_mode == "clarify":
+        log(f"Task #{display_num} requires clarification (certainty too low)")
+
+        # Build clarification message
+        questions = []
+        if analysis and analysis.clarification_questions:
+            questions = [
+                {"question": q.question, "options": q.options, "priority": q.priority}
+                for q in analysis.clarification_questions
+            ]
+
+        # Update task with clarification status
+        clarification_summary = "Task requires clarification before execution."
+        if analysis:
+            clarification_summary += f" Certainty score: {analysis.score:.2f}"
+            if analysis.reasons:
+                top_reason = analysis.reasons[0]
+                clarification_summary += f" ({top_reason.explanation})"
+
+        update_task_status(
+            display_num,
+            "needs_clarification",
+            summary=clarification_summary,
+            certainty_score=analysis.score if analysis else None,
+            clarification_questions=questions
+        )
+        return
 
     # Update status to running
-    update_task_status(display_num, "running")
+    certainty_score = analysis.score if analysis else None
+    update_task_status(display_num, "running", certainty_score=certainty_score)
 
     # Create worktree
     if not create_worktree(display_num):
@@ -268,8 +397,25 @@ def execute_task(task: Dict):
 
     worktree_path = get_worktree_path(display_num)
 
-    # Build prompt for Claude
-    prompt = f"""Work on Push task #{display_num}:
+    # Build prompt for Claude based on execution mode
+    if execution_mode == "planning":
+        prompt = f"""Work on Push task #{display_num}:
+
+{content}
+
+IMPORTANT: This task has medium certainty (score: {f'{analysis.score:.2f}' if analysis else 'N/A'}).
+Please START BY ENTERING PLAN MODE to clarify the approach before implementing.
+
+Reasons for lower certainty:
+{chr(10).join(f"- {r.explanation}" for r in (analysis.reasons[:3] if analysis else []))}
+
+After your plan is approved, implement the changes.
+
+When you're done, the SessionEnd hook will automatically report completion to Supabase.
+
+If you need to understand the codebase, start by reading the CLAUDE.md file if it exists."""
+    else:
+        prompt = f"""Work on Push task #{display_num}:
 
 {content}
 
@@ -278,15 +424,22 @@ IMPORTANT: When you're done, the SessionEnd hook will automatically report compl
 If you need to understand the codebase, start by reading the CLAUDE.md file if it exists."""
 
     try:
+        # Build Claude command based on execution mode
+        cmd = [
+            "claude",
+            "-p", prompt,
+            "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash(git *)",
+            "--output-format", "json"
+        ]
+
+        # Add --plan flag for medium certainty tasks to start in planning mode
+        if execution_mode == "planning":
+            cmd.insert(1, "--plan")
+
         # Run Claude in headless mode
         # SessionEnd hook will handle reporting completion
         proc = subprocess.Popen(
-            [
-                "claude",
-                "-p", prompt,
-                "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash(git *)",
-                "--output-format", "json"
-            ],
+            cmd,
             cwd=str(worktree_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -296,7 +449,8 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
         # Track the running process
         running_tasks[display_num] = proc
 
-        log(f"Started Claude for task #{display_num} (PID: {proc.pid})")
+        mode_desc = "planning mode" if execution_mode == "planning" else "standard mode"
+        log(f"Started Claude for task #{display_num} in {mode_desc} (PID: {proc.pid})")
 
     except Exception as e:
         log(f"Error starting Claude for task #{display_num}: {e}")
