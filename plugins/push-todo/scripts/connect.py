@@ -32,6 +32,9 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
+# Self-healing daemon: auto-starts on any /push-todo command
+from daemon_health import ensure_daemon_running
+
 # Configuration
 API_BASE = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4dXpxY2JxaGlheG1maXR6eGxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzU2OTY5MzQsImV4cCI6MjA1MTI3MjkzNH0.4Nm5_ABkgJCrrFc-bVzbx8qAp-SQo92HKziH7TBgspo"
@@ -860,6 +863,9 @@ def show_migration_hint():
 # ============================================================================
 
 def main():
+    # Self-healing: ensure daemon is running on any /push-todo command
+    ensure_daemon_running()
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Connect to Push (Doctor Mode)")
     parser.add_argument(

@@ -37,6 +37,9 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
+# Self-healing daemon: auto-starts on any /push-todo command
+from daemon_health import ensure_daemon_running
+
 # Configuration
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 
@@ -181,6 +184,9 @@ def fetch_tasks(git_remote: str) -> list:
 
 
 def main():
+    # Self-healing: ensure daemon is running on any /push-todo command
+    ensure_daemon_running()
+
     try:
         # Get git remote for project scoping
         git_remote = get_git_remote()

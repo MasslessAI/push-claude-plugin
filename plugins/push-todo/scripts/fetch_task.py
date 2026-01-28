@@ -76,6 +76,9 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, List
 
+# Self-healing daemon: auto-starts on any /push-todo command
+from daemon_health import ensure_daemon_running, get_daemon_status
+
 # Configuration
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
 
@@ -402,6 +405,44 @@ def parse_task_number(value: str) -> Optional[int]:
         return None
 
 
+def queue_task(display_number: int) -> bool:
+    """
+    Queue a task for background execution by the daemon.
+
+    Sets execution_status to 'queued' via the update-task-execution endpoint.
+    The daemon will pick it up on next poll.
+
+    Args:
+        display_number: The global task number (e.g., 427)
+
+    Returns:
+        True if successfully queued, False otherwise.
+    """
+    api_key = get_api_key()
+    url = f"{API_BASE_URL}/update-task-execution"
+
+    payload = {
+        "displayNumber": display_number,
+        "status": "queued"
+    }
+
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=body, method="PATCH")
+    req.add_header("Authorization", f"Bearer {api_key}")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode())
+            return data.get("success", False)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            raise ValueError("Invalid API key. Run '/push-todo connect' to configure.")
+        return False
+    except urllib.error.URLError:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fetch active Push tasks")
     parser.add_argument("task_number", nargs="?", default=None, help="Task number to fetch directly (e.g., 5 or #5)")
@@ -410,10 +451,45 @@ def main():
     parser.add_argument("--include-backlog", action="store_true", help="Include backlog items in the active list")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
     parser.add_argument("--completion-comment", metavar="TEXT", help="Comment to include when marking task completed (appears in Push app timeline)")
+    parser.add_argument("--queue", metavar="NUM", help="Queue a task for background execution (e.g., --queue 427)")
+    parser.add_argument("--daemon-status", action="store_true", help="Show daemon status")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     args = parser.parse_args()
 
+    # Self-healing: ensure daemon is running on any /push-todo command
+    ensure_daemon_running()
+
     try:
+        # Handle --daemon-status
+        if args.daemon_status:
+            status = get_daemon_status()
+            if args.json:
+                print(json.dumps(status, indent=2))
+            else:
+                if status["running"]:
+                    print(f"Daemon RUNNING (PID: {status['pid']}, uptime: {status['uptime']})")
+                    print(f"Log file: {status['log_file']}")
+                else:
+                    print("Daemon NOT RUNNING")
+                    print("(Will auto-start on next /push-todo command)")
+            return
+
+        # Handle --queue
+        if args.queue:
+            display_num = parse_task_number(args.queue)
+            if display_num is None:
+                print(f"Invalid task number: {args.queue}", file=sys.stderr)
+                sys.exit(1)
+
+            success = queue_task(display_num)
+            if success:
+                print(f"Task #{display_num} queued for background execution")
+                print("Daemon will pick it up shortly.")
+            else:
+                print(f"Failed to queue task #{display_num}", file=sys.stderr)
+                sys.exit(1)
+            return
+
         # Handle mark-completed
         if args.mark_completed:
             success = mark_task_completed(args.mark_completed, args.completion_comment)
