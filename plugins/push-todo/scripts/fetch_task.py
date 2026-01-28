@@ -551,10 +551,22 @@ def main():
         # Handle --watch (live monitoring)
         if args.watch:
             import subprocess as sp
+            import os
             watch_script = Path(__file__).parent / "watch.py"
             cmd = [sys.executable, str(watch_script)]
-            if args.follow:
+
+            # Auto-detect if running in non-interactive environment (Claude Code)
+            # If not a TTY, use --status mode (single snapshot, no ANSI)
+            is_tty = os.isatty(sys.stdout.fileno())
+
+            if args.json:
+                cmd.append("--json")
+            elif not is_tty:
+                # Running in Claude Code or piped - use plain text snapshot
+                cmd.append("--status")
+            elif args.follow:
                 cmd.append("--follow")
+
             try:
                 sp.run(cmd)
             except KeyboardInterrupt:

@@ -6,10 +6,12 @@ Displays real-time status of daemon task execution.
 Reads from ~/.push/daemon_status.json (written by daemon.py).
 
 Usage:
-    python watch.py [--follow]
+    python watch.py [--follow] [--status] [--json]
 
 Options:
     --follow    Exit when all tasks complete (default: run until Ctrl+C)
+    --status    Show current status once and exit (no ANSI, works in Claude Code)
+    --json      Output status as JSON and exit
 """
 
 import argparse
@@ -240,11 +242,73 @@ def render(status: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def render_plain_status(status: Optional[Dict[str, Any]]) -> str:
+    """Render status as plain text (no ANSI codes) for Claude Code."""
+    if not status:
+        return "Daemon: OFFLINE\n\nRun any /push-todo command to start the daemon."
+
+    daemon = status.get("daemon", {})
+    stats = status.get("stats", {})
+    active_tasks = status.get("active_tasks", [])
+    completed = status.get("completed_today", [])
+
+    lines = []
+    lines.append(f"Daemon: ONLINE (v{daemon.get('version', '?')}, PID {daemon.get('pid', '?')})")
+    lines.append(f"Machine: {daemon.get('machine_name', 'unknown')}")
+    lines.append("")
+
+    running = [t for t in active_tasks if t.get("status") == "running"]
+    queued = [t for t in active_tasks if t.get("status") == "queued"]
+
+    if running:
+        lines.append(f"Running ({len(running)}):")
+        for task in running:
+            elapsed = format_duration(task.get("elapsed_seconds", 0))
+            detail = task.get("detail", "")
+            lines.append(f"  ● #{task.get('display_number', '?')} {task.get('summary', 'Unknown')[:40]} ({elapsed})")
+            if detail:
+                lines.append(f"    └─ {detail[:50]}")
+
+    if queued:
+        lines.append(f"\nQueued ({len(queued)}):")
+        for task in queued:
+            lines.append(f"  ○ #{task.get('display_number', '?')} {task.get('summary', 'Unknown')[:40]}")
+
+    if not running and not queued:
+        lines.append("No active tasks")
+
+    lines.append("")
+    lines.append(f"Completed today: {stats.get('completed_today', 0)} | Slots: {stats.get('running', 0)}/{stats.get('max_concurrent', 5)}")
+
+    if completed:
+        lines.append(f"\nRecent completions:")
+        for task in completed[-3:]:
+            duration = format_duration(task.get("duration_seconds", 0))
+            lines.append(f"  ✓ #{task.get('display_number', '?')} ({duration})")
+
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Monitor Push daemon task execution")
     parser.add_argument("--follow", "-f", action="store_true",
                        help="Exit when all tasks complete")
+    parser.add_argument("--status", "-s", action="store_true",
+                       help="Show current status once and exit (no ANSI, works in Claude Code)")
+    parser.add_argument("--json", action="store_true",
+                       help="Output status as JSON and exit")
     args = parser.parse_args()
+
+    # Single-shot modes (no loop, no ANSI)
+    if args.json:
+        status = read_status()
+        print(json.dumps(status, indent=2, default=str) if status else "{}")
+        return
+
+    if args.status:
+        status = read_status()
+        print(render_plain_status(status))
+        return
 
     print(Colors.HIDE_CURSOR, end="")
 

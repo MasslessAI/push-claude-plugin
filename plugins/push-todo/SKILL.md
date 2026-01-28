@@ -68,7 +68,7 @@ This ensures you always see the latest state from the Push app.
 | `/push-todo connect` | Setup or fix problems (doctor flow) |
 | `/push-todo review` | Check completed work against git activity |
 | `/push-todo status` | Show connection status (daemon, account, machine, project) |
-| `/push-todo watch` | Live monitor daemon task execution |
+| `/push-todo watch` | Monitor daemon task execution (auto-detects environment) |
 
 ### Settings (Pro Users)
 
@@ -106,9 +106,13 @@ Status & Settings:
   --status                Show comprehensive status (daemon, account, machine, project)
   --commands              Show available user commands
   --set-batch-size N      Set max tasks for batch queue (1-20)
-  --watch                 Live monitor daemon task execution
-  --follow, -f            With --watch: exit when all tasks complete
   --json                  Output raw JSON format
+
+Monitoring (--watch):
+  --watch                 Monitor daemon tasks (auto-detects environment)
+                          - In Claude Code: shows plain text snapshot
+                          - In terminal: shows live ANSI UI
+  --follow, -f            With --watch in terminal: exit when all tasks complete
 ```
 
 ### Backlog Items
