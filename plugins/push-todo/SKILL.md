@@ -198,22 +198,33 @@ The daemon will process them automatically while you do other things.
 
 **If user says yes** (any affirmative: "yes", "y", "sure", "do it", "queue them"):
 
-1. **Queue the tasks:**
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" \
-     --queue-batch 427,351,289,245,198
-   ```
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" \
+  --queue-batch 427,351,289,245,198
+```
 
-2. **Immediately show daemon status** (so user sees tasks are running):
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" --watch
-   ```
-
-Use the exact task numbers from `BATCH_TASKS` in the output.
-
-**IMPORTANT:** Always show watch status after queuing - users want immediate confirmation that tasks are being processed. This is automatic, don't ask.
+Use the exact task numbers from `BATCH_TASKS` in the output. See **Daemon Mode Rule** below.
 
 **If user says no** or wants to work on a specific task, proceed normally.
+
+## Daemon Mode Rule (IMPORTANT)
+
+**Whenever you queue tasks for daemon execution, ALWAYS show watch status immediately after.**
+
+This applies to ALL scenarios:
+- Batch offer confirmation → queue → watch
+- Multiple task numbers (`/push-todo 427,351`) → queue → watch
+- Direct queue command (`--queue-batch`) → watch
+
+```bash
+# Step 1: Queue tasks
+python3 "..." --queue-batch 427,351,289
+
+# Step 2: ALWAYS show status immediately after (don't ask)
+python3 "..." --watch
+```
+
+This is automatic - users want immediate confirmation that tasks are being processed.
 
 ## Starting a Task
 
