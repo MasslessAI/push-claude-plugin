@@ -284,7 +284,39 @@ The machine ID is used for:
 
 **If `error`:** Warn user, but continue (ID will be auto-created on daemon start).
 
-#### Step 4: Register Project with Keywords
+#### Step 4: Validate Project Info
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.py" --validate-project
+```
+
+**JSON Response:**
+```json
+{
+  "status": "valid" | "warnings" | "error",
+  "project_path": "/Users/you/projects/repo",
+  "is_git_repo": true,
+  "git_remote": "github.com/user/repo",
+  "git_remote_raw": "https://github.com/user/repo.git",
+  "local_registry_status": "registered" | "path_mismatch" | "not_registered",
+  "warnings": [],
+  "message": "Project valid: github.com/user/repo"
+}
+```
+
+Validates:
+- **Project path**: Current directory exists and is valid
+- **Git repo**: `.git` folder exists
+- **Git remote**: Origin remote is configured
+- **Local registry**: Path matches what's registered for daemon routing
+
+**If `valid`:** Continue to Step 5.
+
+**If `warnings`:** Show warnings to user, but continue.
+
+**If `error`:** This is not a valid project directory. Ask user to navigate to correct folder.
+
+#### Step 5: Register Project with Keywords
 
 1. **Read CLAUDE.md** to understand the project context
 

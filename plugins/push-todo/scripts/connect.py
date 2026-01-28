@@ -467,6 +467,114 @@ def get_device_name() -> str:
         return "Unknown Device"
 
 
+def validate_project_info() -> dict:
+    """
+    Validate all project information for the doctor flow.
+
+    Checks:
+    - Project path exists and is a directory
+    - Git repo exists (.git folder)
+    - Git remote is configured
+    - Git remote is normalized correctly
+    - Local registry entry matches current path
+
+    Returns dict with:
+        - status: "valid" | "warnings" | "error"
+        - project_path: Current directory
+        - is_git_repo: Whether .git exists
+        - git_remote: Normalized git remote (or None)
+        - git_remote_raw: Raw git remote URL
+        - local_registry_status: "registered" | "path_mismatch" | "not_registered"
+        - warnings: List of warning messages
+        - message: Summary message
+    """
+    warnings = []
+    project_path = get_project_path()
+    git_remote_raw = get_git_remote()
+    git_remote = normalize_git_remote(git_remote_raw) if git_remote_raw else None
+
+    # Check project path
+    if not project_path:
+        return {
+            "status": "error",
+            "project_path": None,
+            "is_git_repo": False,
+            "git_remote": None,
+            "git_remote_raw": None,
+            "local_registry_status": "not_registered",
+            "warnings": [],
+            "message": "Cannot determine current directory"
+        }
+
+    if not os.path.isdir(project_path):
+        return {
+            "status": "error",
+            "project_path": project_path,
+            "is_git_repo": False,
+            "git_remote": None,
+            "git_remote_raw": None,
+            "local_registry_status": "not_registered",
+            "warnings": [],
+            "message": f"Project path is not a directory: {project_path}"
+        }
+
+    # Check if git repo
+    git_dir = os.path.join(project_path, ".git")
+    is_git_repo = os.path.exists(git_dir)
+
+    if not is_git_repo:
+        warnings.append("Not a git repository (no .git folder)")
+
+    # Check git remote
+    if is_git_repo and not git_remote_raw:
+        warnings.append("Git repo has no 'origin' remote configured")
+
+    if git_remote_raw and not git_remote:
+        warnings.append(f"Could not normalize git remote: {git_remote_raw}")
+
+    # Check local registry
+    local_registry_status = "not_registered"
+    if git_remote:
+        registry = get_registry()
+        registered_path = registry.get_path_without_update(git_remote)
+        if registered_path:
+            if registered_path == project_path:
+                local_registry_status = "registered"
+            else:
+                local_registry_status = "path_mismatch"
+                warnings.append(f"Local registry has different path: {registered_path}")
+        else:
+            local_registry_status = "not_registered"
+            warnings.append("Project not in local registry (daemon won't route tasks here)")
+
+    # Determine overall status
+    if not is_git_repo or not git_remote:
+        status = "warnings"
+    elif warnings:
+        status = "warnings"
+    else:
+        status = "valid"
+
+    # Build summary message
+    if status == "valid":
+        message = f"Project valid: {git_remote}"
+    elif warnings:
+        message = f"Project has {len(warnings)} warning(s)"
+    else:
+        message = "Project validation failed"
+
+    return {
+        "status": status,
+        "project_path": project_path,
+        "is_git_repo": is_git_repo,
+        "git_remote": git_remote,
+        "git_remote_raw": git_remote_raw,
+        "local_registry_status": local_registry_status,
+        "warnings": warnings,
+        "message": message
+    }
+
+
 def get_project_path() -> str:
     """Get the current working directory."""
     try:
@@ -1033,6 +1141,11 @@ def main():
         help="Validate machine ID for multi-Mac coordination (JSON output)"
     )
     parser.add_argument(
+        "--validate-project",
+        action="store_true",
+        help="Validate project folder, git remote, and local registry (JSON output)"
+    )
+    parser.add_argument(
         "--keywords",
         type=str,
         default="",
@@ -1074,6 +1187,12 @@ def main():
     # Handle --validate-machine flag (JSON output for agent parsing)
     if args.validate_machine:
         result = validate_machine_id()
+        print(json.dumps(result, indent=2))
+        return
+
+    # Handle --validate-project flag (JSON output for agent parsing)
+    if args.validate_project:
+        result = validate_project_info()
         print(json.dumps(result, indent=2))
         return
 
@@ -1139,6 +1258,14 @@ def main():
             else:
                 print(f'  Found existing action: "{result["action_name"]}"')
 
+            # Validate and show project info
+            project_info = validate_project_info()
+            if project_info["git_remote"]:
+                print(f"  Git remote: {project_info['git_remote']}")
+            if project_info["warnings"]:
+                for warning in project_info["warnings"]:
+                    print(f"  ⚠️  {warning}")
+
             # Show local registry status
             if git_remote_raw:
                 normalized = normalize_git_remote(git_remote_raw)
@@ -1202,6 +1329,14 @@ def main():
     else:
         print(f'  Connected as {result["email"]}')
     print(f'  Created action: "{result["action_name"]}"')
+
+    # Validate and show project info
+    project_info = validate_project_info()
+    if project_info["git_remote"]:
+        print(f"  Git remote: {project_info['git_remote']}")
+    if project_info["warnings"]:
+        for warning in project_info["warnings"]:
+            print(f"  ⚠️  {warning}")
 
     # Show local registry status
     if git_remote_raw:
