@@ -356,3 +356,71 @@ python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/connect.p
 If the API returns an error:
 - Check if PUSH_API_KEY is set in ~/.config/push/config
 - Suggest: "Run `/push-todo connect` to configure your Push connection"
+
+## Global Daemon (Background Task Execution)
+
+Push includes a background daemon that automatically executes queued tasks. The daemon runs **globally** - one daemon per Mac handles ALL registered projects.
+
+### How It Works
+
+1. **Project Registration:** When you run `/push-todo connect` in a project, it registers the project locally:
+   - Maps `git_remote` (e.g., `github.com/user/repo`) → `local_path` (e.g., `/Users/you/projects/repo`)
+   - Stored in `~/.config/push/projects.json`
+
+2. **Global Daemon:** The daemon polls Supabase for queued tasks across ALL your projects:
+   - Routes each task to the correct project using the local registry
+   - Creates git worktrees for isolated execution
+   - Runs Claude Code in headless mode
+
+3. **Multi-Mac Coordination:** If you have daemons on multiple Macs:
+   - Uses atomic task claiming to prevent duplicate execution
+   - Each Mac has a unique machine ID stored in `~/.config/push/machine_id`
+
+### Registering Multiple Projects
+
+Run `/push-todo connect` once in each project directory:
+
+```bash
+cd ~/projects/ProjectA
+# Run /push-todo connect in Claude Code
+
+cd ~/projects/ProjectB
+# Run /push-todo connect in Claude Code
+```
+
+Each connect adds the project to the local registry. The daemon (already running) will automatically pick up tasks for all registered projects.
+
+### Checking Daemon Status
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/daemon_health.py" --status
+```
+
+Shows:
+- Running status and PID
+- Uptime
+- Mode (global vs legacy)
+- Number of registered projects
+
+### Managing the Daemon
+
+```bash
+# Stop daemon
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/daemon_health.py" --stop
+
+# Start daemon (auto-starts on any /push-todo command)
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/daemon_health.py" --start
+
+# View daemon log
+tail -f ~/.push/daemon.log
+```
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `~/.config/push/config` | API key and email |
+| `~/.config/push/projects.json` | Project registry (git_remote → local_path) |
+| `~/.config/push/machine_id` | Unique machine identifier |
+| `~/.push/daemon.pid` | Daemon process ID |
+| `~/.push/daemon.log` | Daemon log file |
