@@ -103,6 +103,34 @@ CERTAINTY_LOW_THRESHOLD = 0.4   # < 0.4: Request clarification
 # See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
 TASK_TIMEOUT_SECONDS = 3600
 
+# Retry configuration for transient failures
+# See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
+RETRY_MAX_ATTEMPTS = 3
+RETRY_INITIAL_DELAY = 2  # seconds
+RETRY_MAX_DELAY = 30     # seconds
+RETRY_BACKOFF_FACTOR = 2  # exponential backoff multiplier
+
+# Retryable error patterns (network, rate limit, temporary failures)
+RETRYABLE_ERRORS = [
+    "timeout",
+    "connection refused",
+    "connection reset",
+    "network is unreachable",
+    "temporary failure",
+    "rate limit",
+    "429",  # Too Many Requests
+    "502",  # Bad Gateway
+    "503",  # Service Unavailable
+    "504",  # Gateway Timeout
+]
+
+# Notification configuration
+# Confidence-based: 🟢 High (silent), 🟡 Medium (notify), 🔴 Low (stop)
+NOTIFY_ON_START = False      # Don't spam on every task start
+NOTIFY_ON_COMPLETE = True    # Always notify completion
+NOTIFY_ON_FAILURE = True     # Always notify failures
+NOTIFY_ON_NEEDS_INPUT = True # Always notify when input needed
+
 PID_FILE = Path.home() / ".push" / "daemon.pid"
 LOG_FILE = Path.home() / ".push" / "daemon.log"
 VERSION_FILE = Path.home() / ".push" / "daemon.version"
@@ -291,36 +319,146 @@ def get_git_remote() -> Optional[str]:
 
 # ==================== API Helpers ====================
 
+def is_retryable_error(error: Exception) -> bool:
+    """
+    Check if an error is retryable (transient network/rate limit issues).
+
+    Args:
+        error: The exception that occurred
+
+    Returns:
+        True if the error is retryable, False otherwise
+    """
+    error_str = str(error).lower()
+
+    # Check against known retryable patterns
+    for pattern in RETRYABLE_ERRORS:
+        if pattern.lower() in error_str:
+            return True
+
+    # HTTP errors: check status code
+    if isinstance(error, urllib.error.HTTPError):
+        # 429 (rate limit), 5xx (server errors) are retryable
+        if error.code == 429 or 500 <= error.code < 600:
+            return True
+
+    # URLError (network issues) are generally retryable
+    if isinstance(error, urllib.error.URLError):
+        return True
+
+    return False
+
+
 def api_request(
     endpoint: str,
     method: str = "GET",
     data: Optional[Dict] = None,
-    timeout: int = 15
+    timeout: int = 15,
+    retry: bool = True
 ) -> Optional[Dict]:
-    """Make authenticated API request to Supabase."""
+    """
+    Make authenticated API request to Supabase with automatic retry.
+
+    Implements exponential backoff for transient failures:
+    - Network errors (timeout, connection refused)
+    - Rate limits (429)
+    - Server errors (5xx)
+
+    Args:
+        endpoint: API endpoint path
+        method: HTTP method
+        data: Request payload
+        timeout: Request timeout in seconds
+        retry: Whether to retry on transient failures
+
+    Returns:
+        Response JSON or None on failure
+    """
     api_key = get_api_key()
     if not api_key:
         log("No API key configured")
         return None
 
     url = f"{API_BASE_URL}/{endpoint}"
+    max_attempts = RETRY_MAX_ATTEMPTS if retry else 1
+    delay = RETRY_INITIAL_DELAY
 
-    req = urllib.request.Request(url, method=method)
-    req.add_header("Authorization", f"Bearer {api_key}")
-    req.add_header("Content-Type", "application/json")
+    for attempt in range(1, max_attempts + 1):
+        req = urllib.request.Request(url, method=method)
+        req.add_header("Authorization", f"Bearer {api_key}")
+        req.add_header("Content-Type", "application/json")
 
-    if data:
-        req.data = json.dumps(data).encode()
+        if data:
+            req.data = json.dumps(data).encode()
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as e:
-        log(f"API error ({e.code}): {e.reason}")
-        return None
-    except Exception as e:
-        log(f"Request error: {e}")
-        return None
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return json.loads(response.read().decode())
+
+        except (urllib.error.HTTPError, urllib.error.URLError, Exception) as e:
+            is_last_attempt = attempt == max_attempts
+
+            if not is_last_attempt and retry and is_retryable_error(e):
+                # Retryable error - wait and try again
+                log(f"API request failed (attempt {attempt}/{max_attempts}): {e}")
+                log(f"Retrying in {delay}s...")
+                time.sleep(delay)
+                delay = min(delay * RETRY_BACKOFF_FACTOR, RETRY_MAX_DELAY)
+            else:
+                # Non-retryable or last attempt - log and return None
+                if isinstance(e, urllib.error.HTTPError):
+                    log(f"API error ({e.code}): {e.reason}")
+                else:
+                    log(f"Request error: {e}")
+                return None
+
+    return None
+
+
+def send_notification(
+    message: str,
+    task_id: Optional[str] = None,
+    display_number: Optional[int] = None,
+    notification_type: str = "daemon",
+    priority: str = "normal"
+):
+    """
+    Send push notification to user's iPhone via Supabase.
+
+    Confidence-based notification strategy:
+    - 🟢 High confidence: Silent (no notification on start)
+    - 🟡 Medium confidence: Notify with status
+    - 🔴 Low confidence / Error: Always notify
+
+    Args:
+        message: Notification message
+        task_id: Task UUID (optional)
+        display_number: Task display number (optional)
+        notification_type: Type of notification (daemon, task_complete, task_failed, needs_input)
+        priority: Notification priority (normal, high)
+    """
+    payload = {
+        "type": notification_type,
+        "message": message,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    if task_id:
+        payload["task_id"] = task_id
+    if display_number:
+        payload["display_number"] = display_number
+    if priority == "high":
+        payload["priority"] = "high"
+
+    # Use daemon-notification endpoint (will be created if doesn't exist)
+    # For now, just log - actual endpoint can be added later
+    result = api_request("daemon-notification", method="POST", data=payload, retry=False)
+
+    if result and result.get("success"):
+        log(f"Notification sent: {message[:50]}...")
+    else:
+        # Notification failure is non-critical - just log
+        log(f"Notification skipped (endpoint may not exist): {message[:50]}...")
 
 
 def update_task_status(
@@ -732,6 +870,19 @@ def execute_task(task: Dict):
             certainty_score=analysis.score if analysis else None,
             clarification_questions=questions
         )
+
+        # Send notification for low-certainty task (P2 feature)
+        # 🔴 Low confidence = always notify and stop
+        if NOTIFY_ON_NEEDS_INPUT:
+            summary = task.get("summary") or content[:50]
+            send_notification(
+                f"🔴 Task #{display_num} needs input: {summary[:30]}... Please clarify.",
+                task_id=task.get("id") or task.get("todo_id"),
+                display_number=display_num,
+                notification_type="needs_input",
+                priority="high"
+            )
+
         return
 
     # Update status to running (only needed in legacy mode - global mode already claimed)
@@ -1037,6 +1188,23 @@ def check_running_tasks():
                 summary = task_info.get("summary", "Unknown task")
                 pr_url = create_pr_for_task(display_num, summary, project_path)
 
+                # Send completion notification (P2 feature)
+                if NOTIFY_ON_COMPLETE:
+                    if pr_url:
+                        send_notification(
+                            f"✅ Task #{display_num} complete: {summary[:40]}... PR ready for review.",
+                            task_id=task_info.get("task_id"),
+                            display_number=display_num,
+                            notification_type="task_complete"
+                        )
+                    else:
+                        send_notification(
+                            f"✅ Task #{display_num} complete: {summary[:40]}...",
+                            task_id=task_info.get("task_id"),
+                            display_number=display_num,
+                            notification_type="task_complete"
+                        )
+
                 # Track in completed_today
                 completed_today.append({
                     "display_number": display_num,
@@ -1049,7 +1217,20 @@ def check_running_tasks():
             else:
                 log(f"Task #{display_num} failed (Claude exit code: {retcode})")
                 stderr = proc.stderr.read() if proc.stderr else ""
-                update_task_status(display_num, "failed", error=f"Exit code {retcode}: {stderr[:200]}")
+                error_msg = f"Exit code {retcode}: {stderr[:200]}"
+                update_task_status(display_num, "failed", error=error_msg)
+
+                # Send failure notification (P2 feature)
+                if NOTIFY_ON_FAILURE:
+                    summary = task_info.get("summary", "Unknown task")
+                    send_notification(
+                        f"❌ Task #{display_num} failed: {summary[:30]}... Error: {stderr[:50]}",
+                        task_id=task_info.get("task_id"),
+                        display_number=display_num,
+                        notification_type="task_failed",
+                        priority="high"
+                    )
+
                 # Track in completed_today as failed
                 completed_today.append({
                     "display_number": display_num,
@@ -1079,11 +1260,23 @@ def check_running_tasks():
             log(f"Error terminating task #{display_num}: {e}")
 
         # Mark as failed with timeout error
+        timeout_error = f"Task timed out after {duration}s (limit: {TASK_TIMEOUT_SECONDS}s)"
         update_task_status(
             display_num,
             "failed",
-            error=f"Task timed out after {duration}s (limit: {TASK_TIMEOUT_SECONDS}s)"
+            error=timeout_error
         )
+
+        # Send timeout notification (P2 feature)
+        if NOTIFY_ON_FAILURE:
+            summary = task_info.get("summary", "Unknown task")
+            send_notification(
+                f"⏱️ Task #{display_num} timed out: {summary[:30]}... ({duration}s)",
+                task_id=task_info.get("task_id"),
+                display_number=display_num,
+                notification_type="task_timeout",
+                priority="high"
+            )
 
         # Track in completed_today
         completed_today.append({
