@@ -72,9 +72,10 @@ import subprocess
 import urllib.request
 import urllib.error
 import urllib.parse
+import re
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Set
 
 # Self-healing daemon: auto-starts on any /push-todo command
 from daemon_health import ensure_daemon_running, get_daemon_status
@@ -257,6 +258,210 @@ def get_git_remote() -> Optional[str]:
         return url
     except Exception:
         return None
+
+
+# ============================================================================
+# KEYWORD LEARNING (Multi-Source Architecture)
+# ============================================================================
+# Claude Code plugin learns keywords from code changes and feeds them back
+# to Push via the learn-keywords endpoint. These keywords improve AI action
+# matching for future voice todos.
+#
+# See: /docs/20260129_multi_source_keyword_learning_architecture.md
+# ============================================================================
+
+# Common non-technical abbreviations to exclude from ALL_CAPS extraction
+EXCLUDED_CAPS = {
+    "THE", "AND", "FOR", "NOT", "BUT", "ARE", "WAS", "HAS",
+    "CAN", "DID", "GET", "GOT", "HAD", "HIM", "HER", "HIS",
+    "HOW", "ITS", "LET", "MAY", "NEW", "NOW", "OLD", "OUR",
+    "OUT", "OWN", "SAY", "SHE", "TOO", "TWO", "WAY", "WHO",
+    "BOY", "DID", "SAY", "ALL", "ANY", "USE", "ADD", "FIX",
+    "RUN", "SET", "PUT", "TRY", "END", "TOP", "MAX", "MIN",
+}
+
+
+def extract_keywords_from_text(text: str) -> Set[str]:
+    """
+    Extract technical keywords from text using the same patterns as iOS.
+
+    Patterns:
+    1. CamelCase: SwiftData, TodoItem, RealtimeManager
+    2. Dotted names: whisper.cpp, index.ts, package.json
+    3. ALL_CAPS: API, SDK, JWT, RLS (2-6 chars, excluding common words)
+
+    Args:
+        text: Text to extract keywords from (e.g., git diff output)
+
+    Returns:
+        Set of unique keywords (case-sensitive).
+    """
+    keywords: Set[str] = set()
+
+    # Pattern 1: CamelCase (e.g., SwiftData, RealtimeManager)
+    # Match words with at least one lowercase followed by uppercase
+    camel_pattern = r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b'
+    for match in re.finditer(camel_pattern, text):
+        keywords.add(match.group(1))
+
+    # Pattern 2: Dotted names (e.g., whisper.cpp, index.ts)
+    # Match word.extension patterns
+    dotted_pattern = r'\b([a-zA-Z][a-zA-Z0-9]*\.[a-zA-Z]+)\b'
+    for match in re.finditer(dotted_pattern, text):
+        keywords.add(match.group(1))
+
+    # Pattern 3: ALL_CAPS (e.g., API, SDK, JWT, RLS)
+    # Match 2-6 letter all-caps words, excluding common non-technical words
+    caps_pattern = r'\b([A-Z]{2,6})\b'
+    for match in re.finditer(caps_pattern, text):
+        term = match.group(1)
+        if term not in EXCLUDED_CAPS:
+            keywords.add(term)
+
+    return keywords
+
+
+def get_git_diff_for_learning() -> Optional[str]:
+    """
+    Get git diff of recent changes for keyword extraction.
+
+    Tries in order:
+    1. Staged changes (git diff --cached)
+    2. Unstaged changes (git diff)
+    3. Last commit diff (git show HEAD --stat)
+
+    Returns:
+        Combined diff output, or None if no changes found.
+    """
+    diffs = []
+
+    try:
+        # Check staged changes
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            # Get full diff for staged files
+            diff_result = subprocess.run(
+                ["git", "diff", "--cached"],
+                capture_output=True, text=True, timeout=10
+            )
+            if diff_result.returncode == 0:
+                diffs.append(diff_result.stdout)
+
+        # Check unstaged changes
+        result = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            diff_result = subprocess.run(
+                ["git", "diff"],
+                capture_output=True, text=True, timeout=10
+            )
+            if diff_result.returncode == 0:
+                diffs.append(diff_result.stdout)
+
+        # If no uncommitted changes, get last commit
+        if not diffs:
+            result = subprocess.run(
+                ["git", "show", "HEAD", "--format=", "--name-only"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                diff_result = subprocess.run(
+                    ["git", "show", "HEAD", "--format="],
+                    capture_output=True, text=True, timeout=10
+                )
+                if diff_result.returncode == 0:
+                    diffs.append(diff_result.stdout)
+
+    except Exception:
+        pass
+
+    return "\n".join(diffs) if diffs else None
+
+
+def learn_keywords_from_completion(task_id: str, extra_context: Optional[str] = None) -> bool:
+    """
+    Learn keywords from code changes and send to Push.
+
+    Called after task completion to improve future AI action matching.
+    Extracts keywords from git diff and any extra context (completion comment).
+
+    Args:
+        task_id: The UUID of the completed todo (used to resolve action_id).
+        extra_context: Optional additional text to extract keywords from.
+
+    Returns:
+        True if keywords were learned, False otherwise.
+    """
+    try:
+        # Collect text sources
+        text_sources = []
+
+        # 1. Git diff (primary source for code-based learning)
+        diff = get_git_diff_for_learning()
+        if diff:
+            text_sources.append(diff)
+
+        # 2. Extra context (e.g., completion comment)
+        if extra_context:
+            text_sources.append(extra_context)
+
+        if not text_sources:
+            return False
+
+        # Extract keywords
+        combined_text = "\n".join(text_sources)
+        keywords = extract_keywords_from_text(combined_text)
+
+        if not keywords:
+            return False
+
+        # Limit to top 20 keywords (API will further dedupe with existing)
+        keyword_list = list(keywords)[:20]
+
+        # Call learn-keywords API
+        api_key = get_api_key()
+        url = f"{API_BASE_URL}/learn-keywords"
+
+        payload = {
+            "todo_id": task_id,
+            "keywords": keyword_list,
+            "source": "claude-code",
+            "context": {
+                "trigger": "task_complete"
+            }
+        }
+
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Authorization", f"Bearer {api_key}")
+        req.add_header("Content-Type", "application/json")
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            if response.status == 200:
+                result = json.loads(response.read().decode())
+                added = result.get("keywords_added", [])
+                if added:
+                    # Log success (visible in daemon logs)
+                    print(f"[keyword-learning] Learned {len(added)} keywords: {', '.join(added[:5])}{'...' if len(added) > 5 else ''}", file=sys.stderr)
+                return True
+
+    except urllib.error.HTTPError as e:
+        # Non-critical - log but don't fail
+        if e.code == 404:
+            # No action associated with this todo (normal for unassigned tasks)
+            pass
+        else:
+            print(f"[keyword-learning] API error: {e.code}", file=sys.stderr)
+    except Exception as e:
+        # Non-critical - log but don't fail
+        print(f"[keyword-learning] Error: {e}", file=sys.stderr)
+
+    return False
 
 
 def get_api_key() -> str:
@@ -456,6 +661,9 @@ def mark_task_completed(task_id: str, comment: Optional[str] = None) -> bool:
     This syncs the completion back to the Push iOS app via the unified hub.
     Optionally includes a completion comment that appears in the task's timeline.
 
+    After successful completion, also triggers keyword learning to improve
+    future AI action matching (non-blocking, failures logged but not raised).
+
     Args:
         task_id: The UUID of the todo to mark as completed.
         comment: Optional completion comment (summary of work done).
@@ -484,7 +692,13 @@ def mark_task_completed(task_id: str, comment: Optional[str] = None) -> bool:
 
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            return response.status == 200
+            if response.status == 200:
+                # Success - trigger keyword learning (non-blocking)
+                # This extracts keywords from git diff and sends to Push
+                # to improve future AI action matching
+                learn_keywords_from_completion(task_id, comment)
+                return True
+            return False
     except urllib.error.HTTPError:
         return False
     except urllib.error.URLError:
