@@ -316,6 +316,61 @@ Write a good summary:
 
 Confirm to the user: "Task #N marked complete in Push"
 
+### Step 3: Contribute Vocabulary (LLM-Native)
+
+After completing a task, help improve future voice-to-action matching by contributing vocabulary terms. This is about capturing how users would naturally SPEAK about this kind of work.
+
+**Think:** "If the user recorded a voice note about similar work, what words would they SAY?"
+
+**Reasoning process:**
+1. What work did I just complete?
+2. What concepts/domain does this involve?
+3. How would the user naturally DESCRIBE this in spoken language?
+4. What terms would help match future voice notes to this action?
+
+**Quality guidelines:**
+- Focus on SPOKEN language, not code identifiers
+- "realtime sync" not "RealtimeManager"
+- "authentication" not "AuthService"
+- "websocket issues" not "handleWebSocketReconnect"
+- 5-10 high-quality terms is better than 50 code patterns
+
+**Call the API:**
+```python
+# In Python (via the plugin's learn_vocabulary function)
+from fetch_task import learn_vocabulary
+result = learn_vocabulary(
+    todo_id="TASK_UUID",
+    keywords=["term1", "term2", "term3", ...]
+)
+# Returns: { keywords_added, keywords_duplicate, current_keywords, total_keywords }
+```
+
+Or via curl:
+```bash
+curl -X POST "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1/learn-keywords" \
+  -H "Authorization: Bearer $PUSH_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "todo_id": "TASK_UUID",
+    "keywords": ["term1", "term2", "term3"],
+    "source": "claude-code",
+    "context": { "trigger": "task_complete" }
+  }'
+```
+
+**Example reasoning:**
+
+Task: "Fix websocket reconnection bug"
+
+Bad vocabulary (code identifiers):
+- `RealtimeManager`, `handleWebSocketReconnect`, `ConnectionState`
+
+Good vocabulary (spoken language):
+- "realtime", "websocket", "reconnection", "sync", "connection", "retry"
+
+**When to skip:** If the task was trivial or didn't involve domain-specific work, you can skip vocabulary contribution.
+
 ### Commit Message Format
 
 When auto-commit creates a commit, use this format:

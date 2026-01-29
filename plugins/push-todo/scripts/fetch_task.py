@@ -72,10 +72,9 @@ import subprocess
 import urllib.request
 import urllib.error
 import urllib.parse
-import re
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Optional, List, Set
+from typing import Optional, List
 
 # Self-healing daemon: auto-starts on any /push-todo command
 from daemon_health import ensure_daemon_running, get_daemon_status
@@ -261,175 +260,49 @@ def get_git_remote() -> Optional[str]:
 
 
 # ============================================================================
-# KEYWORD LEARNING (Multi-Source Architecture)
+# VOCABULARY LEARNING (LLM-Native Architecture)
 # ============================================================================
-# Claude Code plugin learns keywords from code changes and feeds them back
-# to Push via the learn-keywords endpoint. These keywords improve AI action
-# matching for future voice todos.
+# This is a utility for Claude to call after reasoning about vocabulary.
+# The LLM determines WHAT keywords to send; this function handles HOW.
 #
-# See: /docs/20260129_multi_source_keyword_learning_architecture.md
+# Philosophy: Keywords are a "spoken vocabulary bridge" - they capture how
+# users naturally SPEAK about their work, not code identifiers.
+#
+# See: /docs/20260129_llm_native_keyword_learning_architecture.md
 # ============================================================================
 
-# Common non-technical abbreviations to exclude from ALL_CAPS extraction
-EXCLUDED_CAPS = {
-    "THE", "AND", "FOR", "NOT", "BUT", "ARE", "WAS", "HAS",
-    "CAN", "DID", "GET", "GOT", "HAD", "HIM", "HER", "HIS",
-    "HOW", "ITS", "LET", "MAY", "NEW", "NOW", "OLD", "OUR",
-    "OUT", "OWN", "SAY", "SHE", "TOO", "TWO", "WAY", "WHO",
-    "BOY", "DID", "SAY", "ALL", "ANY", "USE", "ADD", "FIX",
-    "RUN", "SET", "PUT", "TRY", "END", "TOP", "MAX", "MIN",
-}
 
-
-def extract_keywords_from_text(text: str) -> Set[str]:
+def learn_vocabulary(todo_id: str, keywords: List[str]) -> dict:
     """
-    Extract technical keywords from text using the same patterns as iOS.
+    Send vocabulary terms to Push for action learning.
 
-    Patterns:
-    1. CamelCase: SwiftData, TodoItem, RealtimeManager
-    2. Dotted names: whisper.cpp, index.ts, package.json
-    3. ALL_CAPS: API, SDK, JWT, RLS (2-6 chars, excluding common words)
+    This is a utility for Claude to call after reasoning about what spoken
+    vocabulary would help match future voice notes to this action.
+
+    The LLM should determine keywords based on:
+    - How would the user SPEAK about this work in a voice note?
+    - What natural language terms characterize this domain?
+    - NOT code identifiers like CamelCase or file names
 
     Args:
-        text: Text to extract keywords from (e.g., git diff output)
+        todo_id: UUID of the completed todo (resolves to action via junction).
+        keywords: List of spoken-vocabulary terms (determined by LLM reasoning).
 
     Returns:
-        Set of unique keywords (case-sensitive).
-    """
-    keywords: Set[str] = set()
-
-    # Pattern 1: CamelCase (e.g., SwiftData, RealtimeManager)
-    # Match words with at least one lowercase followed by uppercase
-    camel_pattern = r'\b([A-Z][a-z]+[A-Z][a-zA-Z]*)\b'
-    for match in re.finditer(camel_pattern, text):
-        keywords.add(match.group(1))
-
-    # Pattern 2: Dotted names (e.g., whisper.cpp, index.ts)
-    # Match word.extension patterns
-    dotted_pattern = r'\b([a-zA-Z][a-zA-Z0-9]*\.[a-zA-Z]+)\b'
-    for match in re.finditer(dotted_pattern, text):
-        keywords.add(match.group(1))
-
-    # Pattern 3: ALL_CAPS (e.g., API, SDK, JWT, RLS)
-    # Match 2-6 letter all-caps words, excluding common non-technical words
-    caps_pattern = r'\b([A-Z]{2,6})\b'
-    for match in re.finditer(caps_pattern, text):
-        term = match.group(1)
-        if term not in EXCLUDED_CAPS:
-            keywords.add(term)
-
-    return keywords
-
-
-def get_git_diff_for_learning() -> Optional[str]:
-    """
-    Get git diff of recent changes for keyword extraction.
-
-    Tries in order:
-    1. Staged changes (git diff --cached)
-    2. Unstaged changes (git diff)
-    3. Last commit diff (git show HEAD --stat)
-
-    Returns:
-        Combined diff output, or None if no changes found.
-    """
-    diffs = []
-
-    try:
-        # Check staged changes
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only"],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            # Get full diff for staged files
-            diff_result = subprocess.run(
-                ["git", "diff", "--cached"],
-                capture_output=True, text=True, timeout=10
-            )
-            if diff_result.returncode == 0:
-                diffs.append(diff_result.stdout)
-
-        # Check unstaged changes
-        result = subprocess.run(
-            ["git", "diff", "--name-only"],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            diff_result = subprocess.run(
-                ["git", "diff"],
-                capture_output=True, text=True, timeout=10
-            )
-            if diff_result.returncode == 0:
-                diffs.append(diff_result.stdout)
-
-        # If no uncommitted changes, get last commit
-        if not diffs:
-            result = subprocess.run(
-                ["git", "show", "HEAD", "--format=", "--name-only"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                diff_result = subprocess.run(
-                    ["git", "show", "HEAD", "--format="],
-                    capture_output=True, text=True, timeout=10
-                )
-                if diff_result.returncode == 0:
-                    diffs.append(diff_result.stdout)
-
-    except Exception:
-        pass
-
-    return "\n".join(diffs) if diffs else None
-
-
-def learn_keywords_from_completion(task_id: str, extra_context: Optional[str] = None) -> bool:
-    """
-    Learn keywords from code changes and send to Push.
-
-    Called after task completion to improve future AI action matching.
-    Extracts keywords from git diff and any extra context (completion comment).
-
-    Args:
-        task_id: The UUID of the completed todo (used to resolve action_id).
-        extra_context: Optional additional text to extract keywords from.
-
-    Returns:
-        True if keywords were learned, False otherwise.
+        API response dict with:
+        - keywords_added: New terms that were added
+        - keywords_duplicate: Terms that already existed
+        - current_keywords: Full vocabulary list after merge
+        - total_keywords: Count of keywords
+        Or error dict if request failed.
     """
     try:
-        # Collect text sources
-        text_sources = []
-
-        # 1. Git diff (primary source for code-based learning)
-        diff = get_git_diff_for_learning()
-        if diff:
-            text_sources.append(diff)
-
-        # 2. Extra context (e.g., completion comment)
-        if extra_context:
-            text_sources.append(extra_context)
-
-        if not text_sources:
-            return False
-
-        # Extract keywords
-        combined_text = "\n".join(text_sources)
-        keywords = extract_keywords_from_text(combined_text)
-
-        if not keywords:
-            return False
-
-        # Limit to top 20 keywords (API will further dedupe with existing)
-        keyword_list = list(keywords)[:20]
-
-        # Call learn-keywords API
         api_key = get_api_key()
         url = f"{API_BASE_URL}/learn-keywords"
 
         payload = {
-            "todo_id": task_id,
-            "keywords": keyword_list,
+            "todo_id": todo_id,
+            "keywords": keywords,
             "source": "claude-code",
             "context": {
                 "trigger": "task_complete"
@@ -443,25 +316,16 @@ def learn_keywords_from_completion(task_id: str, extra_context: Optional[str] = 
 
         with urllib.request.urlopen(req, timeout=30) as response:
             if response.status == 200:
-                result = json.loads(response.read().decode())
-                added = result.get("keywords_added", [])
-                if added:
-                    # Log success (visible in daemon logs)
-                    print(f"[keyword-learning] Learned {len(added)} keywords: {', '.join(added[:5])}{'...' if len(added) > 5 else ''}", file=sys.stderr)
-                return True
+                return json.loads(response.read().decode())
 
     except urllib.error.HTTPError as e:
-        # Non-critical - log but don't fail
         if e.code == 404:
-            # No action associated with this todo (normal for unassigned tasks)
-            pass
-        else:
-            print(f"[keyword-learning] API error: {e.code}", file=sys.stderr)
+            return {"error": "no_action", "message": "No action associated with this todo"}
+        return {"error": "http_error", "code": e.code}
     except Exception as e:
-        # Non-critical - log but don't fail
-        print(f"[keyword-learning] Error: {e}", file=sys.stderr)
+        return {"error": "exception", "message": str(e)}
 
-    return False
+    return {"error": "unknown"}
 
 
 def get_api_key() -> str:
@@ -661,8 +525,8 @@ def mark_task_completed(task_id: str, comment: Optional[str] = None) -> bool:
     This syncs the completion back to the Push iOS app via the unified hub.
     Optionally includes a completion comment that appears in the task's timeline.
 
-    After successful completion, also triggers keyword learning to improve
-    future AI action matching (non-blocking, failures logged but not raised).
+    Note: Vocabulary learning is handled separately by Claude via learn_vocabulary().
+    See the skill prompt for LLM-native vocabulary contribution guidelines.
 
     Args:
         task_id: The UUID of the todo to mark as completed.
@@ -692,13 +556,7 @@ def mark_task_completed(task_id: str, comment: Optional[str] = None) -> bool:
 
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            if response.status == 200:
-                # Success - trigger keyword learning (non-blocking)
-                # This extracts keywords from git diff and sends to Push
-                # to improve future AI action matching
-                learn_keywords_from_completion(task_id, comment)
-                return True
-            return False
+            return response.status == 200
     except urllib.error.HTTPError:
         return False
     except urllib.error.URLError:
@@ -886,6 +744,8 @@ def main():
     parser.add_argument("--search", metavar="QUERY", help="Search tasks by text (searches both active and completed)")
     parser.add_argument("--mark-completed", metavar="ID", help="Mark a task as completed")
     parser.add_argument("--completion-comment", metavar="TEXT", help="Comment to include when marking task completed (appears in Push app timeline)")
+    parser.add_argument("--learn-vocabulary", metavar="ID", help="Contribute vocabulary for a task (LLM-native: Claude determines keywords)")
+    parser.add_argument("--keywords", metavar="TERMS", help="Comma-separated vocabulary terms (used with --learn-vocabulary)")
     parser.add_argument("--queue", metavar="NUM", help="Queue a task for background execution (e.g., --queue 427)")
     parser.add_argument("--queue-batch", metavar="NUMS", help="Queue multiple tasks (comma-separated: --queue-batch 427,351,289)")
     parser.add_argument("--set-batch-size", metavar="N", type=int, help="Set max tasks for batch queue (1-20, default 5)")
@@ -1242,6 +1102,37 @@ def main():
             else:
                 print(f"{success_count}/{len(task_nums)} tasks queued.", file=sys.stderr)
                 sys.exit(1)
+            return
+
+        # Handle --learn-vocabulary (LLM-native vocabulary contribution)
+        if args.learn_vocabulary:
+            if not args.keywords:
+                print("--keywords required with --learn-vocabulary", file=sys.stderr)
+                print("Example: --learn-vocabulary TASK_ID --keywords 'realtime,sync,websocket'", file=sys.stderr)
+                sys.exit(1)
+
+            # Parse comma-separated keywords
+            keywords = [k.strip() for k in args.keywords.split(",") if k.strip()]
+            if not keywords:
+                print("No valid keywords provided", file=sys.stderr)
+                sys.exit(1)
+
+            result = learn_vocabulary(args.learn_vocabulary, keywords)
+
+            if args.json:
+                print(json.dumps(result, indent=2))
+            elif "error" in result:
+                print(f"Vocabulary learning failed: {result.get('message', result.get('error'))}", file=sys.stderr)
+                sys.exit(1)
+            else:
+                added = result.get("keywords_added", [])
+                dupes = result.get("keywords_duplicate", [])
+                total = result.get("total_keywords", 0)
+                if added:
+                    print(f"Learned {len(added)} new terms: {', '.join(added)}")
+                if dupes:
+                    print(f"Already knew: {', '.join(dupes)}")
+                print(f"Action now has {total} vocabulary terms")
             return
 
         # Handle mark-completed
