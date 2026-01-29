@@ -99,6 +99,10 @@ MAX_CONCURRENT_TASKS = 5
 CERTAINTY_HIGH_THRESHOLD = 0.7   # >= 0.7: Execute immediately
 CERTAINTY_LOW_THRESHOLD = 0.4   # < 0.4: Request clarification
 
+# Task timeout (1 hour default - prevents stuck tasks from blocking slots)
+# See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
+TASK_TIMEOUT_SECONDS = 3600
+
 PID_FILE = Path.home() / ".push" / "daemon.pid"
 LOG_FILE = Path.home() / ".push" / "daemon.log"
 VERSION_FILE = Path.home() / ".push" / "daemon.version"
@@ -769,10 +773,29 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
 
     try:
         # Build Claude command based on execution mode
+        #
+        # Expanded --allowedTools to prevent headless mode from hanging on permission prompts.
+        # See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
+        #
+        # Tool categories:
+        # - File operations: Read, Edit, Write, Glob, Grep (core)
+        # - Git: Bash(git *) for version control
+        # - Build tools: Bash(npm *), Bash(npx *), Bash(yarn *) for JS/TS projects
+        # - Python: Bash(python *), Bash(pip *), Bash(python3 *), Bash(pip3 *)
+        # - Subagents: Task for spawning specialized agents
+        #
+        allowed_tools = ",".join([
+            "Read", "Edit", "Write", "Glob", "Grep",
+            "Bash(git *)",
+            "Bash(npm *)", "Bash(npx *)", "Bash(yarn *)",
+            "Bash(python *)", "Bash(python3 *)", "Bash(pip *)", "Bash(pip3 *)",
+            "Task"
+        ])
+
         cmd = [
             "claude",
             "-p", prompt,
-            "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash(git *)",
+            "--allowedTools", allowed_tools,
             "--output-format", "json"
         ]
 
@@ -814,6 +837,14 @@ def cleanup_worktree(display_number: int, project_path: Optional[str] = None):
     """
     Clean up worktree after task completion.
 
+    IMPORTANT: Branch is PRESERVED for review/PR creation.
+    The branch contains all the work Claude did and should be:
+    1. Reviewed by the user
+    2. Merged via PR
+    3. Only deleted AFTER merge
+
+    See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
+
     Args:
         display_number: Task display number
         project_path: Project path (for determining git cwd)
@@ -824,9 +855,11 @@ def cleanup_worktree(display_number: int, project_path: Optional[str] = None):
         return
 
     git_cwd = project_path if project_path else str(Path.cwd())
+    suffix = get_worktree_suffix()
+    branch = f"push-{display_number}-{suffix}"
 
     try:
-        # Remove the worktree
+        # Remove the worktree only (frees the directory)
         result = subprocess.run(
             ["git", "worktree", "remove", str(worktree_path), "--force"],
             capture_output=True,
@@ -837,22 +870,125 @@ def cleanup_worktree(display_number: int, project_path: Optional[str] = None):
 
         if result.returncode == 0:
             log(f"Cleaned up worktree: {worktree_path}")
+            log(f"Branch preserved for review: {branch}")
         else:
             log(f"Failed to cleanup worktree {worktree_path}: {result.stderr}")
 
-        # Also try to delete the branch
-        suffix = get_worktree_suffix()
-        branch = f"push-{display_number}-{suffix}"
-        subprocess.run(
-            ["git", "branch", "-D", branch],
+        # NOTE: Branch is intentionally NOT deleted!
+        # The branch contains Claude's work and should be reviewed via PR.
+        # User can delete it manually after merging:
+        #   git branch -D push-{display_number}-{suffix}
+
+    except Exception as e:
+        log(f"Worktree cleanup error: {e}")
+
+
+def create_pr_for_task(display_number: int, summary: str, project_path: Optional[str] = None) -> Optional[str]:
+    """
+    Create a GitHub PR for the completed task's branch.
+
+    Industry best practice: Agent → Branch → PR → Human Review → Merge
+    See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
+
+    Args:
+        display_number: Task display number
+        summary: Task summary for PR title
+        project_path: Project path (for git cwd)
+
+    Returns:
+        PR URL if created successfully, None otherwise
+    """
+    suffix = get_worktree_suffix()
+    branch = f"push-{display_number}-{suffix}"
+    git_cwd = project_path if project_path else str(Path.cwd())
+
+    try:
+        # First, check if branch has any commits different from main
+        # (no point creating a PR if Claude didn't make any changes)
+        result = subprocess.run(
+            ["git", "log", "HEAD..{}".format(branch), "--oneline"],
             capture_output=True,
             text=True,
             timeout=10,
             cwd=git_cwd
         )
 
+        if result.returncode != 0:
+            log(f"Could not check branch {branch} for commits")
+            return None
+
+        if not result.stdout.strip():
+            log(f"Branch {branch} has no new commits, skipping PR creation")
+            return None
+
+        commit_count = len(result.stdout.strip().split('\n'))
+        log(f"Branch {branch} has {commit_count} new commit(s)")
+
+        # Push branch to remote
+        push_result = subprocess.run(
+            ["git", "push", "-u", "origin", branch],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=git_cwd
+        )
+
+        if push_result.returncode != 0:
+            log(f"Failed to push branch {branch}: {push_result.stderr}")
+            return None
+
+        log(f"Pushed branch {branch} to origin")
+
+        # Create PR using gh CLI
+        pr_title = f"Push Task #{display_number}: {summary[:50]}"
+        pr_body = f"""## Summary
+
+Automated PR from Push daemon for task #{display_number}.
+
+**Task:** {summary}
+
+---
+
+*This PR was created automatically by the Push task execution daemon.*
+*Review the changes and merge when ready.*
+"""
+
+        pr_result = subprocess.run(
+            [
+                "gh", "pr", "create",
+                "--head", branch,
+                "--title", pr_title,
+                "--body", pr_body
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=git_cwd
+        )
+
+        if pr_result.returncode == 0:
+            pr_url = pr_result.stdout.strip()
+            log(f"Created PR for task #{display_number}: {pr_url}")
+            return pr_url
+        else:
+            # PR might already exist or gh not installed
+            if "already exists" in pr_result.stderr.lower():
+                log(f"PR already exists for branch {branch}")
+            elif "gh: command not found" in pr_result.stderr or "not found" in pr_result.stderr.lower():
+                log(f"GitHub CLI (gh) not installed, skipping PR creation")
+            else:
+                log(f"Failed to create PR: {pr_result.stderr}")
+            return None
+
+    except subprocess.TimeoutExpired:
+        log(f"PR creation timed out for task #{display_number}")
+        return None
+    except FileNotFoundError:
+        log("GitHub CLI (gh) not installed, skipping PR creation")
+        return None
     except Exception as e:
-        log(f"Worktree cleanup error: {e}")
+        log(f"PR creation error for task #{display_number}: {e}")
+        return None
 
 
 # Track project paths for cleanup (display_number -> project_path)
@@ -860,32 +996,55 @@ task_project_paths: Dict[int, Optional[str]] = {}
 
 
 def check_running_tasks():
-    """Check status of running tasks and clean up completed ones."""
+    """
+    Check status of running tasks and clean up completed ones.
+
+    Also detects and terminates stuck tasks that exceed TASK_TIMEOUT_SECONDS.
+    See: /docs/20260128_daemon_background_execution_comprehensive_guide.md
+    """
     completed = []
+    timed_out = []
+    now = datetime.now()
 
     for display_num, proc in running_tasks.items():
+        task_info = task_details.get(display_num, {})
+        started_at = task_info.get("started_at")
+
+        # Check for timeout FIRST (before checking if process exited)
+        if started_at:
+            elapsed = (now - started_at).total_seconds()
+            if elapsed > TASK_TIMEOUT_SECONDS:
+                log(f"Task #{display_num} TIMEOUT after {int(elapsed)}s (limit: {TASK_TIMEOUT_SECONDS}s)")
+                timed_out.append(display_num)
+                continue
+
         retcode = proc.poll()
 
         if retcode is not None:
             # Process completed
             completed.append(display_num)
 
-            # Get task info for completed_today tracking
-            task_info = task_details.get(display_num, {})
-            started_at = task_info.get("started_at")
             duration = 0
             if started_at:
-                duration = int((datetime.now() - started_at).total_seconds())
+                duration = int((now - started_at).total_seconds())
 
             if retcode == 0:
                 log(f"Task #{display_num} completed (Claude exited cleanly)")
+
+                # Auto-create PR for completed work (P1 feature)
+                # This preserves work and enables human review before merge
+                project_path = task_project_paths.get(display_num)
+                summary = task_info.get("summary", "Unknown task")
+                pr_url = create_pr_for_task(display_num, summary, project_path)
+
                 # Track in completed_today
                 completed_today.append({
                     "display_number": display_num,
-                    "summary": task_info.get("summary", "Unknown task"),
-                    "completed_at": datetime.now().isoformat(),
+                    "summary": summary,
+                    "completed_at": now.isoformat(),
                     "duration_seconds": duration,
-                    "status": "completed"
+                    "status": "completed",
+                    "pr_url": pr_url
                 })
             else:
                 log(f"Task #{display_num} failed (Claude exit code: {retcode})")
@@ -895,10 +1054,48 @@ def check_running_tasks():
                 completed_today.append({
                     "display_number": display_num,
                     "summary": task_info.get("summary", "Unknown task"),
-                    "completed_at": datetime.now().isoformat(),
+                    "completed_at": now.isoformat(),
                     "duration_seconds": duration,
                     "status": "failed"
                 })
+
+    # Handle timed out tasks - terminate and mark as failed
+    for display_num in timed_out:
+        proc = running_tasks[display_num]
+        task_info = task_details.get(display_num, {})
+        started_at = task_info.get("started_at")
+        duration = int((now - started_at).total_seconds()) if started_at else 0
+
+        # Terminate the stuck process
+        log(f"Terminating stuck task #{display_num} (PID: {proc.pid})")
+        try:
+            proc.terminate()
+            # Give it a moment to clean up
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log(f"Force killing task #{display_num}")
+            proc.kill()
+        except Exception as e:
+            log(f"Error terminating task #{display_num}: {e}")
+
+        # Mark as failed with timeout error
+        update_task_status(
+            display_num,
+            "failed",
+            error=f"Task timed out after {duration}s (limit: {TASK_TIMEOUT_SECONDS}s)"
+        )
+
+        # Track in completed_today
+        completed_today.append({
+            "display_number": display_num,
+            "summary": task_info.get("summary", "Unknown task"),
+            "completed_at": now.isoformat(),
+            "duration_seconds": duration,
+            "status": "timeout"
+        })
+
+        # Add to completed list for cleanup
+        completed.append(display_num)
 
     # Remove completed tasks from tracking and clean up worktrees
     for display_num in completed:
