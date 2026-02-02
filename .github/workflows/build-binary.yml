@@ -1,0 +1,104 @@
+name: Build Native Binary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'npm/push-todo/natives/**'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 3.0.0)'
+        required: true
+        default: '3.0.0'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(node -p "require('./npm/push-todo/package.json').version")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Swift binary
+        working-directory: npm/push-todo/natives
+        run: |
+          # Build for specific architecture
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            swiftc -O -target arm64-apple-macos12 KeychainHelper.swift -o push-keychain-helper-darwin-arm64
+          else
+            swiftc -O -target x86_64-apple-macos12 KeychainHelper.swift -o push-keychain-helper-darwin-x64
+          fi
+
+          # Make executable
+          chmod +x push-keychain-helper-darwin-*
+
+          # Show info
+          file push-keychain-helper-darwin-*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: push-keychain-helper-darwin-${{ matrix.arch }}
+          path: npm/push-todo/natives/push-keychain-helper-darwin-*
+
+  release:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download arm64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: push-keychain-helper-darwin-arm64
+          path: binaries
+
+      - name: Download x64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: push-keychain-helper-darwin-x64
+          path: binaries
+
+      - name: List binaries
+        run: ls -la binaries/
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: v${{ github.event.inputs.version }}
+          body: |
+            ## Native Binaries for v${{ github.event.inputs.version }}
+
+            These binaries provide E2EE (End-to-End Encryption) support on macOS.
+
+            | File | Architecture |
+            |------|-------------|
+            | `push-keychain-helper-darwin-arm64` | Apple Silicon (M1/M2/M3/M4) |
+            | `push-keychain-helper-darwin-x64` | Intel |
+
+            The npm package downloads these automatically during installation.
+          files: binaries/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

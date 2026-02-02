@@ -1,0 +1,106 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'npm/push-todo/**'
+      - '!npm/push-todo/package-lock.json'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: npm/push-todo/package.json
+
+      - name: Install dependencies
+        working-directory: npm/push-todo
+        run: npm ci --ignore-scripts  # Skip postinstall (binary download)
+
+      - name: Run tests
+        working-directory: npm/push-todo
+        run: npm test
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+
+    # OIDC Trusted Publishing - no NPM_TOKEN needed!
+    permissions:
+      contents: write    # For creating releases
+      id-token: write    # Required for npm OIDC trusted publishing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need previous commit to check version change
+
+      - name: Check if version changed
+        id: version-check
+        working-directory: npm/push-todo
+        run: |
+          # Get current version
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+          # Get previous version (if exists)
+          git show HEAD~1:npm/push-todo/package.json > /tmp/prev-package.json 2>/dev/null || echo '{"version":"0.0.0"}' > /tmp/prev-package.json
+          PREV_VERSION=$(node -p "require('/tmp/prev-package.json').version")
+          echo "previous=$PREV_VERSION" >> $GITHUB_OUTPUT
+
+          # Check if changed
+          if [ "$CURRENT_VERSION" != "$PREV_VERSION" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Version changed: $PREV_VERSION -> $CURRENT_VERSION"
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Version unchanged: $CURRENT_VERSION"
+          fi
+
+      - name: Setup Node.js
+        if: steps.version-check.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      # OIDC Trusted Publishing - npm authenticates via GitHub's OIDC token
+      # No NODE_AUTH_TOKEN needed! Provenance is automatic with trusted publishing.
+      - name: Publish to npm (Trusted Publishing)
+        if: steps.version-check.outputs.changed == 'true'
+        working-directory: npm/push-todo
+        run: npm publish --access public
+
+      - name: Create GitHub Release
+        if: steps.version-check.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version-check.outputs.current }}
+          name: v${{ steps.version-check.outputs.current }}
+          body: |
+            ## @masslessai/push-todo v${{ steps.version-check.outputs.current }}
+
+            Install or update:
+            ```bash
+            npm install -g @masslessai/push-todo
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip publish (no version change)
+        if: steps.version-check.outputs.changed != 'true'
+        run: echo "Skipping publish - version unchanged at ${{ steps.version-check.outputs.current }}"

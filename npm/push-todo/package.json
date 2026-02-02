@@ -1,0 +1,54 @@
+{
+  "name": "@masslessai/push-todo",
+  "version": "3.0.0",
+  "description": "Voice tasks from Push iOS app for Claude Code",
+  "type": "module",
+  "bin": {
+    "push-todo": "./bin/push-todo.js"
+  },
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./fetch": "./lib/fetch.js",
+    "./connect": "./lib/connect.js",
+    "./config": "./lib/config.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "hooks/",
+    "commands/",
+    "natives/",
+    "scripts/",
+    ".claude-plugin/",
+    "SKILL.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "test": "node --test test/",
+    "start": "node bin/push-todo.js"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "push",
+    "voice",
+    "todo",
+    "ios",
+    "cli"
+  ],
+  "author": "MasslessAI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MasslessAI/push-todo-cli"
+  },
+  "homepage": "https://pushto.do",
+  "bugs": {
+    "url": "https://github.com/MasslessAI/push-todo-cli/issues"
+  }
+}
