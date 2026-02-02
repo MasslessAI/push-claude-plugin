@@ -65,6 +65,8 @@ This ensures you always see the latest state from the Push app.
 |---------|-------------|
 | `/push-todo` | Show active tasks for current project |
 | `/push-todo 427` | Work on task #427 directly |
+| `/push-todo 427 --view-screenshot 0` | Open first screenshot from task #427 |
+| `/push-todo resume 427` | Resume Claude session for completed task #427 |
 | `/push-todo connect` | Setup or fix problems (doctor flow) |
 | `/push-todo review` | Check completed work against git activity |
 | `/push-todo status` | Show connection status (daemon, account, machine, project) |
@@ -112,6 +114,8 @@ Task Actions:
   --completion-comment TEXT  Note to include (appears in Push app timeline)
   --queue NUM             Queue single task for daemon (e.g., --queue 427)
   --queue-batch NUMS      Queue multiple tasks (e.g., --queue-batch 427,351,289)
+  --resume NUM            Resume Claude session for a completed daemon task
+  --view-screenshot INDEX_OR_FILENAME  Open screenshot attachment (index or filename)
 
 Status & Settings:
   --status                Show comprehensive status (daemon, account, machine, project)
@@ -143,9 +147,16 @@ When the user specifies a task number directly (e.g., `/push-todo 5` or `/push-t
 
 1. **Script fetches immediately** - No project filtering, no list scanning
 2. **API call goes directly** - Uses `?display_number=N` query param
-3. **Returns single task** - Ready to work on instantly
+3. **Searches ALL tasks** - Active, backlog, AND completed
+4. **Returns single task** - Ready to work on or resume
 
 This is the fastest path - use it when the user knows their task number.
+
+**Status indicators in output:**
+- Active tasks - no prefix
+- Backlog tasks - 📦 prefix + "Status: 📦 Backlog"
+- Completed tasks - ✅ prefix + "Status: ✅ Completed"
+- Daemon tasks with sessions - "Session: Available (`/push-todo resume N`)"
 
 ## Fetching Tasks
 
@@ -395,6 +406,38 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 - Body: What changed, why, and any docs created
 - Research: Include if significant exploration was done
 - Always include Co-Authored-By
+
+## Resuming Sessions
+
+When a task is completed by the daemon, the Claude Code session ID is captured and stored. You can resume these sessions to see exactly what Claude did.
+
+```bash
+# Resume session for a completed task
+python3 "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/skills/push-todo}/scripts/fetch_task.py" --resume 427
+```
+
+Or via the user command:
+```
+/push-todo resume 427
+```
+
+**Important limitations:**
+- Sessions are stored locally in `~/.claude/history.jsonl`
+- You can only resume on the same machine that executed the task
+- Only tasks completed by the daemon have session IDs
+- Manually completed tasks won't have resumable sessions
+
+**What you'll see:**
+- Full conversation history with Claude
+- All tool calls and their results
+- File reads, edits, and commands run
+- Decision-making process and reasoning
+
+This is useful for:
+- Understanding how a task was completed
+- Learning Claude's approach for similar tasks
+- Debugging unexpected outcomes
+- Documentation and audit trails
 
 ## Reviewing Tasks
 
