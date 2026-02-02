@@ -55,6 +55,8 @@ Output format (JSON):
                 "project_hint": "Optional project hint",
                 "git_remote": "Optional git remote for project scoping",
                 "is_backlog": "Boolean indicating if task is in the backlog",
+                "screenshot_attachments": "Optional list of screenshot attachments",
+                "link_attachments": "Optional list of link attachments",
                 "created_at": "ISO timestamp"
             }
         ]
@@ -93,6 +95,66 @@ except ImportError:
     E2EE_ENABLED = False
     decrypt_todo_field = None
     is_e2ee_available = None
+
+def parse_json_field(json_str: Optional[str]) -> Optional[List[dict]]:
+    """
+    Parse a JSON string field into a list of dictionaries.
+    Returns None if the field is null/empty or parsing fails.
+    """
+    if not json_str:
+        return None
+    try:
+        parsed = json.loads(json_str)
+        if isinstance(parsed, list):
+            return parsed
+        return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def get_screenshot_path(filename: str) -> str:
+    """
+    Get the full path to a screenshot file in iCloud Drive.
+
+    Args:
+        filename: Screenshot filename (e.g., "ABC-123.heic")
+
+    Returns:
+        Full path to screenshot file
+    """
+    home = os.path.expanduser("~")
+    icloud_path = os.path.join(
+        home,
+        "Library/Mobile Documents/iCloud~ai~massless~push/Documents/Screenshots",
+        filename
+    )
+    return icloud_path
+
+
+def screenshot_exists(filename: str) -> bool:
+    """Check if screenshot file exists in iCloud Drive."""
+    path = get_screenshot_path(filename)
+    return os.path.exists(path)
+
+
+def open_screenshot(filepath: str):
+    """
+    Open screenshot file in default image viewer.
+
+    Args:
+        filepath: Full path to screenshot file
+
+    Raises:
+        SystemExit: If file doesn't exist
+    """
+    if not os.path.exists(filepath):
+        print(f"Screenshot not found: {filepath}", file=sys.stderr)
+        sys.exit(1)
+
+    # Use macOS 'open' command
+    subprocess.run(["open", filepath], check=True)
+    print(f"Opened screenshot: {os.path.basename(filepath)}")
+
 
 # Configuration
 API_BASE_URL = "https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1"
@@ -476,6 +538,11 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None, backlog_filter: Optio
             for t in todos:
                 # Decrypt E2EE fields if encryption is available
                 t = decrypt_task_fields(t)
+
+                # Parse attachment JSON fields
+                screenshot_attachments = parse_json_field(t.get("screenshotAttachmentsJson"))
+                link_attachments = parse_json_field(t.get("linkAttachmentsJson"))
+
                 result.append({
                     "id": t.get("id"),
                     "display_number": t.get("displayNumber"),  # Human-readable #1, #2, #3...
@@ -488,6 +555,8 @@ def fetch_tasks_from_api(git_remote: Optional[str] = None, backlog_filter: Optio
                     # See: /docs/20260128_git_remote_derivation_from_actions_architecture.md
                     "git_remote": t.get("gitRemote") or git_remote,
                     "is_backlog": t.get("isBacklog", False),
+                    "screenshot_attachments": screenshot_attachments,
+                    "link_attachments": link_attachments,
                     "created_at": t.get("createdAt"),
                 })
             return result
@@ -549,6 +618,11 @@ def fetch_task_by_number(display_number: int) -> Optional[dict]:
             t = todos[0]
             # Decrypt E2EE fields if encryption is available
             t = decrypt_task_fields(t)
+
+            # Parse attachment JSON fields
+            screenshot_attachments = parse_json_field(t.get("screenshotAttachmentsJson"))
+            link_attachments = parse_json_field(t.get("linkAttachmentsJson"))
+
             return {
                 "id": t.get("id"),
                 "display_number": t.get("displayNumber"),
@@ -559,7 +633,13 @@ def fetch_task_by_number(display_number: int) -> Optional[dict]:
                 # git_remote derived from actions (DRY - not stored on todos)
                 "git_remote": t.get("gitRemote"),
                 "is_backlog": t.get("isBacklog", False),
+                "is_completed": t.get("isCompleted", False),
+                "screenshot_attachments": screenshot_attachments,
+                "link_attachments": link_attachments,
                 "created_at": t.get("createdAt"),
+                # Execution fields for daemon tasks
+                "execution_session_id": t.get("executionSessionId"),
+                "execution_status": t.get("executionStatus"),
             }
     except urllib.error.HTTPError as e:
         if e.code == 401:
@@ -620,11 +700,19 @@ def format_task_for_display(task: dict) -> str:
     """Format a task for human-readable display."""
     lines = []
 
-    # Build task header with display number and backlog indicator
+    # Build task header with display number and status indicator
     display_num = task.get("display_number")
-    backlog_prefix = "📦 " if task.get("is_backlog") else ""
+
+    # Determine status prefix
+    if task.get("is_completed"):
+        status_prefix = "✅ "  # Completed
+    elif task.get("is_backlog"):
+        status_prefix = "📦 "  # Backlog
+    else:
+        status_prefix = ""  # Active (no prefix)
+
     num_prefix = f"#{display_num} " if display_num else ""
-    lines.append(f"## Task: {num_prefix}{backlog_prefix}{task.get('summary', 'No summary')}")
+    lines.append(f"## Task: {num_prefix}{status_prefix}{task.get('summary', 'No summary')}")
     lines.append("")
 
     if task.get("project_hint"):
@@ -635,6 +723,55 @@ def format_task_for_display(task: dict) -> str:
     lines.append(task.get("content", "No content"))
     lines.append("")
 
+    # Show attachments if present
+    screenshots = task.get("screenshot_attachments")
+    links = task.get("link_attachments")
+
+    if screenshots or links:
+        lines.append("### Attachments")
+        lines.append("")
+
+        if screenshots:
+            lines.append(f"#### Screenshots ({len(screenshots)})")
+            for idx, screenshot in enumerate(screenshots):
+                filename = screenshot.get("imageFilename", "unknown")
+                width = screenshot.get("width")
+                height = screenshot.get("height")
+                captured_at = screenshot.get("capturedAt")
+
+                # Display filename with dimensions
+                dimensions = f"({width}x{height})" if width and height else ""
+                lines.append(f"{idx + 1}. {filename} {dimensions}")
+
+                # Show file path
+                filepath = get_screenshot_path(filename)
+                lines.append(f"   📂 {filepath}")
+
+                # Check if file exists
+                if screenshot_exists(filename):
+                    lines.append(f"   ✅ Available locally")
+                else:
+                    lines.append(f"   ☁️ Syncing from iCloud...")
+
+                # Show captured date if available
+                if captured_at:
+                    try:
+                        dt = datetime.fromisoformat(captured_at.replace('Z', '+00:00'))
+                        formatted_date = dt.strftime("%b %d, %Y at %I:%M %p")
+                        lines.append(f"   📅 Captured: {formatted_date}")
+                    except:
+                        pass
+
+                lines.append("")
+
+        if links:
+            lines.append(f"#### Links ({len(links)})")
+            for link in links:
+                url = link.get("url", "")
+                title = link.get("title") or url
+                lines.append(f"🔗 [{title}]({url})")
+            lines.append("")
+
     if task.get("transcript"):
         lines.append("### Original Voice Transcript")
         lines.append(f"> {task['transcript']}")
@@ -643,6 +780,18 @@ def format_task_for_display(task: dict) -> str:
     lines.append(f"**Task ID:** `{task.get('id', 'unknown')}`")
     if display_num:
         lines.append(f"**Display Number:** #{display_num}")
+
+    # Show status
+    if task.get("is_completed"):
+        lines.append("**Status:** ✅ Completed")
+        # Show session resume hint if session_id is available
+        if task.get("execution_session_id"):
+            lines.append(f"**Session:** Available (`/push-todo resume {display_num}`)")
+    elif task.get("is_backlog"):
+        lines.append("**Status:** 📦 Backlog")
+    else:
+        lines.append("**Status:** Active")
+
     lines.append(f"**Created:** {task.get('created_at', 'unknown')}")
 
     return "\n".join(lines)
@@ -808,12 +957,15 @@ def main():
     parser.add_argument("--commands", action="store_true", help="Show available user commands")
     parser.add_argument("--watch", action="store_true", help="Live monitor daemon task execution")
     parser.add_argument("--follow", "-f", action="store_true", help="With --watch: exit when all tasks complete")
+    parser.add_argument("--resume", metavar="NUM", help="Resume Claude session for a completed task (e.g., --resume 427)")
+    parser.add_argument("--view-screenshot", metavar="INDEX_OR_FILENAME", help="Open screenshot for viewing (index starting from 0, or filename)")
     parser.add_argument("--json", action="store_true", help="Output raw JSON")
     args = parser.parse_args()
 
-    # Parse positional args: either task_number or "search <query>"
+    # Parse positional args: task_number, "search <query>", or "resume <task_number>"
     task_number = None
     search_from_positional = None
+    resume_from_positional = None
     if args.positional_args:
         if args.positional_args[0].lower() == "search":
             # "search foo bar" -> search query is "foo bar"
@@ -822,6 +974,13 @@ def main():
             else:
                 print("Usage: /push-todo search \"your search query\"", file=sys.stderr)
                 sys.exit(1)
+        elif args.positional_args[0].lower() == "resume":
+            # "resume 427" -> resume session for task #427
+            if len(args.positional_args) > 1:
+                resume_from_positional = args.positional_args[1]
+            else:
+                print("Usage: /push-todo resume <task_number>", file=sys.stderr)
+                sys.exit(1)
         else:
             # First positional arg is the task number
             task_number = args.positional_args[0]
@@ -829,6 +988,9 @@ def main():
     # Merge search from positional with --search flag
     if search_from_positional and not args.search:
         args.search = search_from_positional
+    # Merge resume from positional with --resume flag
+    if resume_from_positional and not args.resume:
+        args.resume = resume_from_positional
     # Store task_number for later use
     args.task_number = task_number
 
@@ -898,6 +1060,94 @@ def main():
                 print(f"Unknown setting: {args.setting}", file=sys.stderr)
                 print("Available settings: auto-commit, batch-size", file=sys.stderr)
                 sys.exit(1)
+
+        # Handle --resume (resume Claude session for a completed task)
+        if args.resume:
+            task_num = args.resume.lstrip("#")
+            try:
+                display_number = int(task_num)
+            except ValueError:
+                print(f"Invalid task number: {args.resume}", file=sys.stderr)
+                sys.exit(1)
+
+            # Fetch task to get session_id
+            task = fetch_task_by_number(display_number)
+            if not task:
+                print(f"Task #{display_number} not found", file=sys.stderr)
+                sys.exit(1)
+
+            session_id = task.get("execution_session_id")
+            if not session_id:
+                execution_status = task.get("execution_status")
+                if execution_status:
+                    print(f"Task #{display_number} has execution status '{execution_status}' but no session ID.")
+                    print("Session ID is captured when daemon completes a task.")
+                    print()
+                    print("Possible reasons:")
+                    print("  - Task was completed before session capture was added")
+                    print("  - Task was completed manually (not by daemon)")
+                    print("  - Daemon couldn't extract session ID from Claude's output")
+                else:
+                    print(f"Task #{display_number} was not executed by the daemon.")
+                    print("Session resume is only available for tasks completed by the Push daemon.")
+                sys.exit(1)
+
+            # Launch claude --resume with the session ID
+            print(f"Resuming session for task #{display_number}...")
+            print(f"Session ID: {session_id}")
+            print()
+
+            import subprocess
+            try:
+                # Use execvp to replace current process with Claude
+                # This gives control of terminal to Claude
+                os.execvp("claude", ["claude", "--resume", session_id])
+            except FileNotFoundError:
+                print("Error: 'claude' command not found. Is Claude Code installed?", file=sys.stderr)
+                sys.exit(1)
+            except Exception as e:
+                print(f"Error launching Claude: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        # Handle --view-screenshot (open screenshot for viewing)
+        if args.view_screenshot:
+            # If task number provided, get task's screenshots
+            if args.task_number:
+                task_num = args.task_number.lstrip("#")
+                try:
+                    display_number = int(task_num)
+                except ValueError:
+                    print(f"Invalid task number: {args.task_number}", file=sys.stderr)
+                    sys.exit(1)
+
+                task = fetch_task_by_number(display_number)
+                if not task:
+                    print(f"Task #{display_number} not found", file=sys.stderr)
+                    sys.exit(1)
+
+                screenshots = task.get("screenshot_attachments", [])
+                if not screenshots:
+                    print(f"Task #{display_number} has no screenshot attachments", file=sys.stderr)
+                    sys.exit(1)
+
+                # Try to parse as index
+                try:
+                    idx = int(args.view_screenshot)
+                    if idx < 0 or idx >= len(screenshots):
+                        print(f"Screenshot index {idx} out of range (0-{len(screenshots)-1})", file=sys.stderr)
+                        sys.exit(1)
+                    filename = screenshots[idx].get("imageFilename")
+                except ValueError:
+                    # Not an index, treat as filename
+                    filename = args.view_screenshot
+            else:
+                # No task number, treat as filename
+                filename = args.view_screenshot
+
+            # Get path and open
+            filepath = get_screenshot_path(filename)
+            open_screenshot(filepath)
+            return
 
         # Handle --search (search tasks by text)
         if args.search:
