@@ -3,7 +3,7 @@
  * Post-install script for Push CLI.
  *
  * Sets up integrations for ALL detected AI coding clients:
- * 1. Claude Code - symlink to ~/.claude/plugins/
+ * 1. Claude Code - symlink to ~/.claude/skills/ (gives clean /push-todo command)
  * 2. OpenAI Codex - AGENTS.md in ~/.codex/
  * 3. Clawdbot - SKILL.md in ~/.clawdbot/skills/
  * 4. Downloads native keychain helper binary (macOS)
@@ -24,10 +24,10 @@ const PACKAGE_ROOT = join(__dirname, '..');
 
 // Claude Code locations
 const CLAUDE_DIR = join(homedir(), '.claude');
-const PLUGIN_DIR = join(CLAUDE_DIR, 'plugins');
-const PLUGIN_LINK = join(PLUGIN_DIR, 'push-todo');
-const LEGACY_SKILL_DIR = join(CLAUDE_DIR, 'skills');
-const LEGACY_SKILL_LINK = join(LEGACY_SKILL_DIR, 'push-todo');
+const SKILL_DIR = join(CLAUDE_DIR, 'skills');
+const SKILL_LINK = join(SKILL_DIR, 'push-todo');
+const LEGACY_PLUGIN_DIR = join(CLAUDE_DIR, 'plugins');
+const LEGACY_PLUGIN_LINK = join(LEGACY_PLUGIN_DIR, 'push-todo');
 
 // OpenAI Codex locations
 const CODEX_DIR = join(homedir(), '.codex');
@@ -51,81 +51,84 @@ const BINARY_URL = `https://github.com/MasslessAI/push-todo-cli/releases/downloa
 const BINARY_URL_X64 = `https://github.com/MasslessAI/push-todo-cli/releases/download/v${VERSION}/${BINARY_NAME}-darwin-x64`;
 
 /**
- * Set up Claude Code plugin by creating symlink.
+ * Set up Claude Code skill by creating symlink.
  *
- * Creates: ~/.claude/plugins/push-todo -> <npm-package-location>
+ * Creates: ~/.claude/skills/push-todo -> <npm-package-location>
+ *
+ * Skills give clean slash commands like /push-todo (no namespace prefix).
  *
  * @returns {boolean} True if successful
  */
-function setupClaudePlugin() {
+function setupClaudeSkill() {
   try {
-    // Ensure ~/.claude/plugins/ directory exists
-    if (!existsSync(PLUGIN_DIR)) {
-      mkdirSync(PLUGIN_DIR, { recursive: true });
-      console.log('[push-todo] Created ~/.claude/plugins/ directory');
+    // Ensure ~/.claude/skills/ directory exists
+    if (!existsSync(SKILL_DIR)) {
+      mkdirSync(SKILL_DIR, { recursive: true });
+      console.log('[push-todo] Created ~/.claude/skills/ directory');
     }
 
     // Check if symlink already exists
-    if (existsSync(PLUGIN_LINK)) {
+    if (existsSync(SKILL_LINK)) {
       try {
-        const stats = lstatSync(PLUGIN_LINK);
+        const stats = lstatSync(SKILL_LINK);
         if (stats.isSymbolicLink()) {
-          const currentTarget = readlinkSync(PLUGIN_LINK);
+          const currentTarget = readlinkSync(SKILL_LINK);
           if (currentTarget === PACKAGE_ROOT) {
-            console.log('[push-todo] Claude Code plugin symlink already configured.');
+            console.log('[push-todo] Claude Code skill symlink already configured.');
             return true;
           }
           // Different target - remove and recreate
           console.log('[push-todo] Updating existing symlink...');
-          unlinkSync(PLUGIN_LINK);
+          unlinkSync(SKILL_LINK);
         } else {
           // It's a directory or file, not a symlink - back it up
-          console.log('[push-todo] Found existing plugin directory, backing up...');
-          const backupPath = `${PLUGIN_LINK}.backup.${Date.now()}`;
-          rmSync(PLUGIN_LINK, { recursive: true });
+          console.log('[push-todo] Found existing skill directory, backing up...');
+          const backupPath = `${SKILL_LINK}.backup.${Date.now()}`;
+          rmSync(SKILL_LINK, { recursive: true });
           console.log(`[push-todo] Backed up to ${backupPath}`);
         }
       } catch (err) {
-        console.log(`[push-todo] Warning: Could not check existing plugin: ${err.message}`);
+        console.log(`[push-todo] Warning: Could not check existing skill: ${err.message}`);
       }
     }
 
     // Create the symlink
-    symlinkSync(PACKAGE_ROOT, PLUGIN_LINK);
-    console.log('[push-todo] Claude Code plugin installed:');
-    console.log(`[push-todo]   ~/.claude/plugins/push-todo -> ${PACKAGE_ROOT}`);
+    symlinkSync(PACKAGE_ROOT, SKILL_LINK);
+    console.log('[push-todo] Claude Code skill installed:');
+    console.log(`[push-todo]   ~/.claude/skills/push-todo -> ${PACKAGE_ROOT}`);
     return true;
   } catch (error) {
-    console.error(`[push-todo] Failed to set up Claude Code plugin: ${error.message}`);
+    console.error(`[push-todo] Failed to set up Claude Code skill: ${error.message}`);
     console.log('[push-todo] You can manually create the symlink:');
-    console.log(`[push-todo]   ln -s "${PACKAGE_ROOT}" "${PLUGIN_LINK}"`);
+    console.log(`[push-todo]   ln -s "${PACKAGE_ROOT}" "${SKILL_LINK}"`);
     return false;
   }
 }
 
 /**
- * Clean up legacy installation (Python version in ~/.claude/skills/).
+ * Clean up legacy plugin installation (in ~/.claude/plugins/).
+ * We migrated from plugins to skills for cleaner /push-todo command.
  */
 function cleanupLegacyInstallation() {
-  if (!existsSync(LEGACY_SKILL_LINK)) {
+  if (!existsSync(LEGACY_PLUGIN_LINK)) {
     return;
   }
 
   try {
-    const stats = lstatSync(LEGACY_SKILL_LINK);
+    const stats = lstatSync(LEGACY_PLUGIN_LINK);
 
     if (stats.isSymbolicLink()) {
-      const target = readlinkSync(LEGACY_SKILL_LINK);
-      // Check if it points to old Python location
-      if (target.includes('plugins/push-todo') || target.includes('push-todo-cli')) {
-        console.log('[push-todo] Removing legacy symlink at ~/.claude/skills/push-todo');
-        unlinkSync(LEGACY_SKILL_LINK);
-        console.log('[push-todo] Legacy symlink removed.');
-      }
+      console.log('[push-todo] Removing legacy plugin symlink at ~/.claude/plugins/push-todo');
+      unlinkSync(LEGACY_PLUGIN_LINK);
+      console.log('[push-todo] Legacy plugin symlink removed.');
+    } else if (stats.isDirectory()) {
+      console.log('[push-todo] Removing legacy plugin directory at ~/.claude/plugins/push-todo');
+      rmSync(LEGACY_PLUGIN_LINK, { recursive: true });
+      console.log('[push-todo] Legacy plugin directory removed.');
     }
   } catch (error) {
     // Ignore errors - this is best-effort cleanup
-    console.log(`[push-todo] Note: Could not clean up legacy installation: ${error.message}`);
+    console.log(`[push-todo] Note: Could not clean up legacy plugin: ${error.message}`);
   }
 }
 
@@ -331,9 +334,9 @@ async function main() {
   // Step 2: Clean up legacy installation
   cleanupLegacyInstallation();
 
-  // Step 3: Set up Claude Code plugin symlink
-  console.log('[push-todo] Setting up Claude Code plugin...');
-  const claudeSuccess = setupClaudePlugin();
+  // Step 3: Set up Claude Code skill symlink
+  console.log('[push-todo] Setting up Claude Code skill...');
+  const claudeSuccess = setupClaudeSkill();
   console.log('');
 
   // Step 4: Set up OpenAI Codex (if installed)
