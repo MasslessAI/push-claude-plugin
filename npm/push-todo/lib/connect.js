@@ -1133,6 +1133,14 @@ export async function runConnect(options = {}) {
   console.log('  ' + '='.repeat(40));
   console.log('');
 
+  // Step 1: Check for updates
+  const versionInfo = await checkVersion();
+  if (versionInfo.updateAvailable) {
+    console.log(`  ${yellow('⚠')}  Update available: ${versionInfo.current} → ${versionInfo.latest}`);
+    console.log(`     Run: ${cyan('npm update -g @masslessai/push-todo')}`);
+    console.log('');
+  }
+
   let existingKey, existingEmail;
   try {
     existingKey = getApiKey();
