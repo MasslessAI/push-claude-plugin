@@ -15,7 +15,7 @@ import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '.
 import { getScreenshotPath, screenshotExists, openScreenshot } from './utils/screenshots.js';
 import { bold, red, cyan, dim, green } from './utils/colors.js';
 
-const VERSION = '3.0.4';
+const VERSION = '3.0.5';
 
 const HELP_TEXT = `
 ${bold('push-todo')} - Voice tasks from Push iOS app for Claude Code
@@ -63,6 +63,17 @@ ${bold('EXAMPLES:')}
   push-todo search "auth bug"      Search for tasks matching "auth bug"
   push-todo connect                Run connection diagnostics
 
+${bold('CONNECT OPTIONS:')}
+  --reauth                         Force re-authentication
+  --client <type>                  Client type (claude-code, openai-codex, clawdbot)
+  --check-version                  Check for updates (JSON output)
+  --update                         Update to latest version
+  --validate-key                   Validate API key (JSON output)
+  --validate-machine               Validate machine registration (JSON output)
+  --validate-project               Validate project registration (JSON output)
+  --store-e2ee-key <key>           Import E2EE encryption key
+  --description <text>             Project description (with connect)
+
 ${bold('SETTINGS:')}
   push-todo setting                Show all settings
   push-todo setting auto-commit    Toggle auto-commit
@@ -96,7 +107,17 @@ const options = {
   'commands': { type: 'boolean' },
   'json': { type: 'boolean' },
   'version': { type: 'boolean', short: 'v' },
-  'help': { type: 'boolean', short: 'h' }
+  'help': { type: 'boolean', short: 'h' },
+  // Connect options
+  'reauth': { type: 'boolean' },
+  'client': { type: 'string' },
+  'check-version': { type: 'boolean' },
+  'update': { type: 'boolean' },
+  'validate-key': { type: 'boolean' },
+  'validate-machine': { type: 'boolean' },
+  'validate-project': { type: 'boolean' },
+  'store-e2ee-key': { type: 'string' },
+  'description': { type: 'string' }
 };
 
 /**
