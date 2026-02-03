@@ -118,12 +118,20 @@ export async function fetchTaskByNumber(displayNumber) {
  * @returns {Promise<boolean>} True if successful
  */
 export async function markTaskCompleted(taskId, comment = '') {
-  const response = await apiRequest('mark-todo-completed', {
-    method: 'POST',
-    body: JSON.stringify({
-      todo_id: taskId,
-      completion_comment: comment
-    })
+  const payload = {
+    todoId: taskId,
+    isCompleted: true,
+    completedAt: new Date().toISOString()
+  };
+
+  // Add completion comment if provided (appears in Push app timeline)
+  if (comment) {
+    payload.completionComment = comment;
+  }
+
+  const response = await apiRequest('todo-status', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
@@ -137,14 +145,18 @@ export async function markTaskCompleted(taskId, comment = '') {
 /**
  * Queue a task for daemon execution.
  *
+ * Sets execution_status to 'queued' via the update-task-execution endpoint.
+ * The daemon will pick it up on next poll.
+ *
  * @param {number} displayNumber - The task's display number
  * @returns {Promise<boolean>} True if successful
  */
 export async function queueTask(displayNumber) {
-  const response = await apiRequest('queue-task', {
-    method: 'POST',
+  const response = await apiRequest('update-task-execution', {
+    method: 'PATCH',
     body: JSON.stringify({
-      display_number: displayNumber
+      displayNumber: displayNumber,
+      status: 'queued'
     })
   });
 
@@ -153,7 +165,8 @@ export async function queueTask(displayNumber) {
     throw new Error(`Failed to queue task: ${text}`);
   }
 
-  return true;
+  const data = await response.json();
+  return data.success || false;
 }
 
 /**
@@ -189,7 +202,7 @@ export async function queueTasks(displayNumbers) {
  */
 export async function searchTasks(query, gitRemote = null) {
   const params = new URLSearchParams();
-  params.set('query', query);
+  params.set('q', query);  // Edge function expects 'q', not 'query'
   if (gitRemote) {
     params.set('git_remote', gitRemote);
   }
