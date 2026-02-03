@@ -7,11 +7,13 @@
 import { parseArgs } from 'util';
 import { spawn } from 'child_process';
 import * as fetch from './fetch.js';
+import * as api from './api.js';
 import { runConnect } from './connect.js';
 import { startWatch } from './watch.js';
 import { showSettings, toggleSetting, setMaxBatchSize } from './config.js';
 import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon-health.js';
-import { bold, red, cyan, dim } from './utils/colors.js';
+import { getScreenshotPath, screenshotExists, openScreenshot } from './utils/screenshots.js';
+import { bold, red, cyan, dim, green } from './utils/colors.js';
 
 const VERSION = '3.0.2';
 
@@ -40,6 +42,9 @@ ${bold('OPTIONS:')}
   --watch, -w                      Live terminal UI
   --setting [name]                 Show or toggle settings
   --resume <number>                Resume Claude session for a completed task
+  --view-screenshot <idx>          Open screenshot for viewing (index or filename)
+  --learn-vocabulary <uuid>        Contribute vocabulary for a task
+  --keywords <terms>               Comma-separated vocabulary terms (with --learn-vocabulary)
   --set-batch-size <N>             Set max tasks for batch queue (1-20)
   --daemon-status                  Show daemon status
   --daemon-start                   Start daemon manually
@@ -79,6 +84,9 @@ const options = {
   'watch': { type: 'boolean', short: 'w' },
   'setting': { type: 'string' },
   'resume': { type: 'string' },
+  'view-screenshot': { type: 'string' },
+  'learn-vocabulary': { type: 'string' },
+  'keywords': { type: 'string' },
   'set-batch-size': { type: 'string' },
   'daemon-status': { type: 'boolean' },
   'daemon-start': { type: 'boolean' },
@@ -280,6 +288,101 @@ export async function run(argv) {
       process.exit(code || 0);
     });
 
+    return;
+  }
+
+  // Handle --view-screenshot (open screenshot for viewing)
+  if (values['view-screenshot']) {
+    // Get the first positional as task number (if provided)
+    const taskNum = positionals[0]?.replace(/^#/, '');
+
+    if (taskNum && /^\d+$/.test(taskNum)) {
+      // Task number provided - get task's screenshots
+      const displayNumber = parseInt(taskNum, 10);
+      const task = await fetch.getTaskByNumber(displayNumber);
+
+      if (!task) {
+        console.error(red(`Task #${displayNumber} not found`));
+        process.exit(1);
+      }
+
+      const screenshots = task.screenshot_attachments || task.screenshotAttachments || [];
+      if (screenshots.length === 0) {
+        console.error(red(`Task #${displayNumber} has no screenshot attachments`));
+        process.exit(1);
+      }
+
+      // Try to parse as index
+      let filename;
+      const idx = parseInt(values['view-screenshot'], 10);
+      if (!isNaN(idx)) {
+        if (idx < 0 || idx >= screenshots.length) {
+          console.error(red(`Screenshot index ${idx} out of range (0-${screenshots.length - 1})`));
+          process.exit(1);
+        }
+        filename = screenshots[idx].imageFilename || screenshots[idx].image_filename;
+      } else {
+        // Not an index, treat as filename
+        filename = values['view-screenshot'];
+      }
+
+      const filepath = getScreenshotPath(filename);
+      try {
+        await openScreenshot(filepath);
+      } catch (error) {
+        console.error(red(error.message));
+        process.exit(1);
+      }
+    } else {
+      // No task number, treat arg as filename
+      const filepath = getScreenshotPath(values['view-screenshot']);
+      try {
+        await openScreenshot(filepath);
+      } catch (error) {
+        console.error(red(error.message));
+        process.exit(1);
+      }
+    }
+    return;
+  }
+
+  // Handle --learn-vocabulary (contribute vocabulary terms)
+  if (values['learn-vocabulary']) {
+    if (!values.keywords) {
+      console.error(red('--keywords required with --learn-vocabulary'));
+      console.error("Example: --learn-vocabulary TASK_ID --keywords 'realtime,sync,websocket'");
+      process.exit(1);
+    }
+
+    // Parse comma-separated keywords
+    const keywords = values.keywords.split(',').map(k => k.trim()).filter(Boolean);
+    if (keywords.length === 0) {
+      console.error(red('No valid keywords provided'));
+      process.exit(1);
+    }
+
+    try {
+      const result = await api.learnVocabulary(values['learn-vocabulary'], keywords);
+
+      if (values.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        const added = result.keywords_added || [];
+        const dupes = result.keywords_duplicate || [];
+        const total = result.total_keywords || 0;
+
+        if (added.length > 0) {
+          console.log(green(`Added ${added.length} new terms: ${added.join(', ')}`));
+        }
+        if (dupes.length > 0) {
+          console.log(dim(`Already known: ${dupes.join(', ')}`));
+        }
+        console.log(`Total vocabulary: ${total} terms`);
+      }
+    } catch (error) {
+      console.error(red(`Failed to learn vocabulary: ${error.message}`));
+      process.exit(1);
+    }
     return;
   }
 

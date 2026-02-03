@@ -322,4 +322,30 @@ export async function getLatestVersion() {
   }
 }
 
+/**
+ * Learn vocabulary terms for a task.
+ *
+ * The LLM determines WHAT keywords to send; this function handles HOW.
+ *
+ * @param {string} todoId - UUID of the task
+ * @param {string[]} keywords - List of vocabulary terms
+ * @returns {Promise<Object>} Result with keywords_added, keywords_duplicate, etc.
+ */
+export async function learnVocabulary(todoId, keywords) {
+  const response = await apiRequest('learn-keywords', {
+    method: 'POST',
+    body: JSON.stringify({
+      todo_id: todoId,
+      keywords
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to learn vocabulary: ${text}`);
+  }
+
+  return response.json();
+}
+
 export { API_BASE };
