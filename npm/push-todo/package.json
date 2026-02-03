@@ -1,6 +1,6 @@
 {
   "name": "@masslessai/push-todo",
-  "version": "3.0.8",
+  "version": "3.0.9",
   "description": "Voice tasks from Push iOS app for Claude Code",
   "type": "module",
   "bin": {
@@ -29,6 +29,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
+    "preuninstall": "node scripts/preuninstall.js",
     "test": "node --test test/",
     "start": "node bin/push-todo.js"
   },
