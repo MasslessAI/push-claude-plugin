@@ -1,6 +1,6 @@
 {
   "name": "@masslessai/push-todo",
-  "version": "3.4.5",
+  "version": "3.4.6",
   "description": "Voice tasks from Push iOS app for Claude Code",
   "type": "module",
   "bin": {
@@ -17,10 +17,8 @@
     "bin/",
     "lib/",
     "hooks/",
-    "commands/",
     "natives/",
     "scripts/",
-    ".claude-plugin/",
     "SKILL.md",
     "LICENSE"
   ],
@@ -35,7 +33,7 @@
   },
   "keywords": [
     "claude-code",
-    "claude-code-plugin",
+    "claude-code-skill",
     "push",
     "voice",
     "todo",
