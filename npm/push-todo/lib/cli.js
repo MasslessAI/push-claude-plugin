@@ -13,7 +13,7 @@ import { showSettings, toggleSetting, setMaxBatchSize } from './config.js';
 import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon-health.js';
 import { bold, red, cyan, dim } from './utils/colors.js';
 
-const VERSION = '3.0.1';
+const VERSION = '3.0.2';
 
 const HELP_TEXT = `
 ${bold('push-todo')} - Voice tasks from Push iOS app for Claude Code
