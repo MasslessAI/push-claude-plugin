@@ -8,55 +8,45 @@ Receive and work on voice tasks captured on your iPhone using the Push app.
 curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/clawdbot/install-clawdbot.sh | bash
 ```
 
+Or install manually:
+```bash
+npm install -g @masslessai/push-todo
+```
+
 ## Setup
 
 After installation, authenticate with your Push account:
 
-1. In Clawdbot, say "connect to Push" or run `/push-todo connect`
-2. A browser window will open for Sign in with Apple
-3. After authentication, you're ready to go!
+```bash
+push-todo connect
+```
+
+A browser window will open for Sign in with Apple.
 
 ## Usage
 
 | Command | Description |
 |---------|-------------|
-| "Show my Push tasks" | List active voice tasks |
-| "Push tasks" | Same as above |
-| `/push-todo` | Explicit skill invocation |
-| `/push-todo connect` | Re-authenticate or register new project |
-| `/push-todo #427` | Jump directly to task #427 |
+| `push-todo` | List active tasks |
+| `push-todo 427` | Show task #427 |
+| `push-todo connect` | Connect/fix issues |
+| `push-todo search "query"` | Search tasks |
+
+In Clawdbot, say "show my Push tasks" or `/push-todo`.
 
 ## Shared Configuration
 
-This skill shares configuration with Claude Code and Codex installations:
-- Config file: `~/.config/push/config`
-- One authentication works for all three clients
+This shares configuration with Claude Code and Codex:
+- Config: `~/.config/push/config`
+- One authentication works for all clients
 
 ## Updates
 
-To update the skill, either:
-
-1. Run `/push-todo connect` in Clawdbot (checks and applies updates)
-2. Re-run the install script:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/clawdbot/install-clawdbot.sh | bash
-   ```
-
-## Troubleshooting
-
-**Most issues are fixed by running:**
-```
-/push-todo connect
+```bash
+npm update -g @masslessai/push-todo
 ```
 
-This will:
-- Re-authenticate if your session expired
-- Update the skill if a new version is available
-- Re-register your project if needed
-
-**Still having issues?**
-- Check that you have active tasks in the Push app (not completed)
-- Verify config exists: `cat ~/.config/push/config`
+Or run `push-todo connect` to check for updates.
 
 ## Support
 

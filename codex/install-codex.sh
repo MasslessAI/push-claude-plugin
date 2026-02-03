@@ -1,61 +1,88 @@
 #!/bin/bash
-# Install Push Tasks skill for OpenAI Codex
+# Install Push Tasks for OpenAI Codex
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/codex/install-codex.sh | bash
 
 set -e
 
+echo ""
 echo "Installing Push Tasks for OpenAI Codex..."
+echo ""
 
+# Check for Node.js
+if ! command -v node &> /dev/null; then
+    echo "Error: Node.js is not installed."
+    echo ""
+    echo "Install Node.js 18+ first: https://nodejs.org/"
+    exit 1
+fi
+
+# Check Node.js version
+NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+if [ "$NODE_VERSION" -lt 18 ]; then
+    echo "Error: Node.js 18+ required (found v$NODE_VERSION)"
+    exit 1
+fi
+
+# Install npm package (provides push-todo CLI)
+echo "Installing @masslessai/push-todo..."
+npm install -g @masslessai/push-todo
+
+# Set up Codex integration
 CODEX_DIR="$HOME/.codex"
-SKILLS_DIR="$CODEX_DIR/skills/push-todo"
 AGENTS_FILE="$CODEX_DIR/AGENTS.md"
 
-# Create directories
-mkdir -p "$SKILLS_DIR/scripts"
+mkdir -p "$CODEX_DIR"
 
-# Download files from GitHub
-BASE_URL="https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main"
-
-echo "Downloading skill files..."
-# Download canonical SKILL.md and transform paths for Codex
-curl -sL "$BASE_URL/plugins/push-todo/SKILL.md" | \
-  sed 's|\${CLAUDE_PLUGIN_ROOT:-\$HOME/\.claude/skills/push-todo}|$HOME/.codex/skills/push-todo|g' \
-  > "$SKILLS_DIR/SKILL.md"
-
-curl -sL "$BASE_URL/plugins/push-todo/scripts/connect.py" > "$SKILLS_DIR/scripts/connect.py"
-curl -sL "$BASE_URL/plugins/push-todo/scripts/fetch_task.py" > "$SKILLS_DIR/scripts/fetch_task.py"
-curl -sL "$BASE_URL/plugins/push-todo/scripts/check_tasks.py" > "$SKILLS_DIR/scripts/check_tasks.py"
-
-chmod +x "$SKILLS_DIR/scripts/"*.py
-
-# Add bootstrap to AGENTS.md
-BOOTSTRAP='
+# Add Push Tasks section to AGENTS.md
+PUSH_SECTION='
 ## Push Tasks Integration
+
+Voice tasks captured on iPhone via the Push app.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `push-todo` | List active tasks |
+| `push-todo 427` | Show task #427 |
+| `push-todo connect` | Connect/fix issues |
+| `push-todo search "query"` | Search tasks |
+
+### Session Start
 
 At the start of each session, check for pending tasks:
 ```bash
-source ~/.config/push/config 2>/dev/null && python3 ~/.codex/skills/push-todo/scripts/check_tasks.py 2>/dev/null
+push-todo --json 2>/dev/null | head -1
 ```
-If tasks > 0, inform: "You have X task(s) from Push. Type $push-todo to see them."
+If tasks exist, inform: "You have X task(s) from Push. Type $push-todo to see them."
 '
 
 if [ -f "$AGENTS_FILE" ]; then
     if ! grep -q "Push Tasks Integration" "$AGENTS_FILE"; then
-        echo "$BOOTSTRAP" >> "$AGENTS_FILE"
-        echo "Added Push bootstrap to existing AGENTS.md"
+        echo "$PUSH_SECTION" >> "$AGENTS_FILE"
+        echo "Added Push section to existing AGENTS.md"
     else
-        echo "Push bootstrap already exists in AGENTS.md"
+        echo "Push section already exists in AGENTS.md"
     fi
 else
-    echo "$BOOTSTRAP" > "$AGENTS_FILE"
-    echo "Created AGENTS.md with Push bootstrap"
+    echo "$PUSH_SECTION" > "$AGENTS_FILE"
+    echo "Created AGENTS.md with Push section"
 fi
 
 echo ""
 echo "Installation complete!"
 echo ""
-echo "Next steps:"
-echo "  1. Run: \$push-todo connect"
-echo "  2. Sign in with your Push account"
-echo "  3. Start capturing voice tasks on your iPhone!"
+
+if [ -f "$HOME/.config/push/config" ]; then
+    echo "Found existing Push configuration."
+    echo "Type '\$push-todo' in Codex to see your tasks."
+else
+    echo "Next steps:"
+    echo "  1. Run: push-todo connect"
+    echo "  2. Sign in with your Push account"
+    echo "  3. Type '\$push-todo' in Codex"
+fi
 echo ""
 echo "Learn more: https://pushto.do"

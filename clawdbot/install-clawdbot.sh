@@ -1,54 +1,96 @@
 #!/bin/bash
-# Install Push Tasks skill for Clawdbot
+# Install Push Tasks for Clawdbot
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/clawdbot/install-clawdbot.sh | bash
 
 set -e
 
+echo ""
 echo "Installing Push Tasks for Clawdbot..."
+echo ""
 
+# Check for Node.js
+if ! command -v node &> /dev/null; then
+    echo "Error: Node.js is not installed."
+    echo ""
+    echo "Install Node.js 18+ first: https://nodejs.org/"
+    exit 1
+fi
+
+# Check Node.js version
+NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+if [ "$NODE_VERSION" -lt 18 ]; then
+    echo "Error: Node.js 18+ required (found v$NODE_VERSION)"
+    exit 1
+fi
+
+# Install npm package (provides push-todo CLI)
+echo "Installing @masslessai/push-todo..."
+npm install -g @masslessai/push-todo
+
+# Set up Clawdbot skill directory
 CLAWDBOT_DIR="$HOME/.clawdbot"
 SKILLS_DIR="$CLAWDBOT_DIR/skills/push-todo"
 
-# Create directories
-mkdir -p "$SKILLS_DIR/scripts"
-mkdir -p "$SKILLS_DIR/.claude-plugin"
+mkdir -p "$SKILLS_DIR"
 
-# Download files from GitHub
-BASE_URL="https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main"
+# Create minimal SKILL.md for Clawdbot
+cat > "$SKILLS_DIR/SKILL.md" << 'EOF'
+# Push Tasks
 
-echo "Downloading skill files..."
+Voice tasks captured on iPhone, ready to work on.
 
-# Download canonical SKILL.md and transform paths for Clawdbot
-curl -sL "$BASE_URL/plugins/push-todo/SKILL.md" | \
-  sed 's|\${CLAUDE_PLUGIN_ROOT:-\$HOME/\.claude/skills/push-todo}|$HOME/.clawdbot/skills/push-todo|g' \
-  > "$SKILLS_DIR/SKILL.md"
+## Commands
 
-# Download plugin.json for version checking
-curl -sL "$BASE_URL/plugins/push-todo/.claude-plugin/plugin.json" > "$SKILLS_DIR/.claude-plugin/plugin.json"
+Run these in the terminal:
 
-# Download Python scripts
-curl -sL "$BASE_URL/plugins/push-todo/scripts/connect.py" > "$SKILLS_DIR/scripts/connect.py"
-curl -sL "$BASE_URL/plugins/push-todo/scripts/fetch_task.py" > "$SKILLS_DIR/scripts/fetch_task.py"
-curl -sL "$BASE_URL/plugins/push-todo/scripts/check_tasks.py" > "$SKILLS_DIR/scripts/check_tasks.py"
+| Command | Description |
+|---------|-------------|
+| `push-todo` | List active tasks |
+| `push-todo 427` | Show task #427 |
+| `push-todo connect` | Connect/fix issues |
+| `push-todo search "query"` | Search tasks |
+| `push-todo --help` | All options |
 
-chmod +x "$SKILLS_DIR/scripts/"*.py
+## Quick Start
+
+If not connected yet, run:
+```bash
+push-todo connect
+```
+
+To see tasks:
+```bash
+push-todo
+```
+
+To work on a specific task:
+```bash
+push-todo 427
+```
+
+## Session Start
+
+At the start of each session, check for tasks:
+```bash
+push-todo --json 2>/dev/null | head -1
+```
+If tasks exist, inform the user.
+EOF
 
 echo ""
 echo "Installation complete!"
 echo ""
 
-# Check if already configured
 if [ -f "$HOME/.config/push/config" ]; then
     echo "Found existing Push configuration."
-    echo ""
-    echo "You're all set! Say 'push-todo' or '/push-todo' in Clawdbot to see your tasks."
+    echo "Say '/push-todo' in Clawdbot to see your tasks."
 else
     echo "Next steps:"
-    echo "  1. In Clawdbot, say '/push-todo connect'"
+    echo "  1. Run: push-todo connect"
     echo "  2. Sign in with your Push account"
-    echo "  3. Start capturing voice tasks on your iPhone!"
+    echo "  3. Say '/push-todo' in Clawdbot"
 fi
 echo ""
 echo "Learn more: https://pushto.do"
