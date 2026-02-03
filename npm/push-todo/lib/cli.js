@@ -9,6 +9,7 @@ import * as fetch from './fetch.js';
 import { runConnect } from './connect.js';
 import { startWatch } from './watch.js';
 import { showSettings, toggleSetting } from './config.js';
+import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon-health.js';
 import { bold, red, cyan, dim } from './utils/colors.js';
 
 const VERSION = '3.0.0';
@@ -37,6 +38,9 @@ ${bold('OPTIONS:')}
   --status                         Show connection and daemon status
   --watch, -w                      Live terminal UI
   --setting [name]                 Show or toggle settings
+  --daemon-status                  Show daemon status
+  --daemon-start                   Start daemon manually
+  --daemon-stop                    Stop daemon
   --json                           Output as JSON
   --version, -v                    Show version
   --help, -h                       Show this help
@@ -70,6 +74,9 @@ const options = {
   'status': { type: 'boolean' },
   'watch': { type: 'boolean', short: 'w' },
   'setting': { type: 'string' },
+  'daemon-status': { type: 'boolean' },
+  'daemon-start': { type: 'boolean' },
+  'daemon-stop': { type: 'boolean' },
   'json': { type: 'boolean' },
   'version': { type: 'boolean', short: 'v' },
   'help': { type: 'boolean', short: 'h' }
@@ -114,6 +121,63 @@ export async function run(argv) {
     console.log(`push-todo ${VERSION}`);
     return;
   }
+
+  // Daemon management commands (don't auto-start daemon for these)
+  if (values['daemon-status']) {
+    const status = getDaemonStatus();
+    if (status.running) {
+      console.log(`${bold('Daemon:')} Running (PID: ${status.pid})`);
+      if (status.uptime) console.log(`${dim('Uptime:')} ${status.uptime}`);
+      if (status.version) console.log(`${dim('Version:')} ${status.version}`);
+      if (status.runningTasks?.length > 0) {
+        console.log(`\n${bold('Running Tasks:')}`);
+        for (const t of status.runningTasks) {
+          console.log(`  #${t.displayNumber} - ${t.summary}`);
+        }
+      }
+      if (status.completedToday?.length > 0) {
+        console.log(`\n${bold('Completed Today:')} ${status.completedToday.length} tasks`);
+      }
+    } else {
+      console.log(`${bold('Daemon:')} Not running`);
+    }
+    return;
+  }
+
+  if (values['daemon-start']) {
+    const status = getDaemonStatus();
+    if (status.running) {
+      console.log(`Daemon already running (PID: ${status.pid})`);
+    } else {
+      const success = startDaemon();
+      if (success) {
+        console.log('Daemon started');
+      } else {
+        console.error(red('Failed to start daemon'));
+        process.exit(1);
+      }
+    }
+    return;
+  }
+
+  if (values['daemon-stop']) {
+    const status = getDaemonStatus();
+    if (!status.running) {
+      console.log('Daemon is not running');
+    } else {
+      const success = stopDaemon();
+      if (success) {
+        console.log('Daemon stopped');
+      } else {
+        console.error(red('Failed to stop daemon'));
+        process.exit(1);
+      }
+    }
+    return;
+  }
+
+  // Auto-start daemon on every command (self-healing behavior)
+  ensureDaemonRunning();
 
   // Get the command (first positional)
   const command = positionals[0];
