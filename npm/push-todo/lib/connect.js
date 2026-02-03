@@ -9,20 +9,21 @@
  * - E2EE setup: Compile Swift helper, import encryption key
  * - Machine validation: Multi-Mac coordination
  *
- * Ported from: plugins/push-todo/scripts/connect.py
+ * Ported from: plugins/push-todo/scripts/connect.py (1866 lines)
  */
 
-import { execSync, spawnSync } from 'child_process';
-import { existsSync, mkdirSync, unlinkSync, chmodSync, readFileSync } from 'fs';
-import { setTimeout } from 'timers/promises';
+import { execSync, spawnSync, spawn } from 'child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, statSync } from 'fs';
+import { setTimeout as sleep } from 'timers/promises';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import * as readline from 'readline';
 import * as api from './api.js';
 import { getApiKey, saveCredentials, clearCredentials, getConfigValue, getEmail } from './config.js';
 import { getMachineId, getMachineName } from './machine-id.js';
 import { getRegistry } from './project-registry.js';
-import { getGitRemote, isGitRepo, getGitRoot } from './utils/git.js';
+import { getGitRemote, isGitRepo, getGitRoot, normalizeGitRemote } from './utils/git.js';
 import { isE2EEAvailable } from './encryption.js';
 import { ensureDaemonRunning } from './daemon-health.js';
 import { bold, green, yellow, red, cyan, dim } from './utils/colors.js';
@@ -32,6 +33,10 @@ const __dirname = dirname(__filename);
 
 // Supabase anonymous key for auth flow
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4dXpxY2JxaGlheG1maXR6eGxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzI0ODA5MjIsImV4cCI6MjA0ODA1NjkyMn0.Qxov5qJTVLWmseyFNhBQBJN7-t5sXlHZyzFKhSN_e5g';
+const API_BASE = 'https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1';
+
+// Remote URLs for updates
+const REMOTE_PACKAGE_JSON_URL = 'https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/npm/push-todo/package.json';
 
 // Get version from package.json
 function getVersion() {
@@ -52,6 +57,38 @@ const CLIENT_NAMES = {
   'openai-codex': 'OpenAI Codex',
   'clawdbot': 'Clawdbot'
 };
+
+// ============================================================================
+// INSTALLATION METHOD DETECTION
+// ============================================================================
+
+/**
+ * Detect how the package was installed.
+ *
+ * Returns:
+ *   "npm-global" - Installed via npm install -g
+ *   "npm-local" - Installed locally in node_modules
+ *   "development" - Linked for development
+ */
+function getInstallationMethod() {
+  const pkgPath = join(__dirname, '..');
+
+  // Check if it's a symlink (development setup)
+  try {
+    const stats = statSync(pkgPath, { throwIfNoEntry: false });
+    if (stats?.isSymbolicLink?.()) {
+      return 'development';
+    }
+  } catch {}
+
+  // Check if in node_modules (local install)
+  if (pkgPath.includes('node_modules')) {
+    return 'npm-local';
+  }
+
+  // Default to global npm install
+  return 'npm-global';
+}
 
 // ============================================================================
 // E2EE SETUP (End-to-End Encryption)
@@ -292,6 +329,13 @@ function storeE2EEKeyDirect(keyInput) {
 }
 
 /**
+ * Check if running in an interactive terminal.
+ */
+function isInteractive() {
+  return process.stdin.isTTY && process.stdout.isTTY;
+}
+
+/**
  * Check if user has any encrypted todos.
  */
 async function checkUserHasEncryptedTodos() {
@@ -300,7 +344,7 @@ async function checkUserHasEncryptedTodos() {
     if (!apiKey) return false;
 
     const response = await fetch(
-      `https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1/synced-todos?is_encrypted=true&limit=1`,
+      `${API_BASE}/synced-todos?is_encrypted=true&limit=1`,
       {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -320,61 +364,127 @@ async function checkUserHasEncryptedTodos() {
 }
 
 /**
+ * Interactive E2EE key import (for TTY only).
+ */
+async function importE2EEKey() {
+  if (!isInteractive()) {
+    console.log('');
+    console.log('  E2EE_KEY_IMPORT_AVAILABLE');
+    console.log('  Use: push-todo connect --store-e2ee-key <base64_key>');
+    return false;
+  }
+
+  console.log('');
+  console.log('  🔐 Import Encryption Key');
+  console.log('  ' + '-'.repeat(38));
+  console.log('');
+  console.log('  Your Push account has E2EE enabled.');
+  console.log('  To decrypt tasks on this Mac, import your encryption key.');
+  console.log('');
+  console.log('  On your iPhone:');
+  console.log('    1. Open Push app');
+  console.log('    2. Go to Settings > End-to-End Encryption');
+  console.log("    3. Tap 'Export Encryption Key'");
+  console.log('    4. Copy the key');
+  console.log('');
+
+  // Prompt for key
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise((resolve) => {
+    rl.question('  Paste your encryption key (or press Enter to skip): ', (keyInput) => {
+      rl.close();
+
+      keyInput = keyInput.trim();
+      if (!keyInput) {
+        console.log('  Skipped key import.');
+        resolve(false);
+        return;
+      }
+
+      const result = storeE2EEKeyDirect(keyInput);
+      if (result.status === 'success') {
+        console.log('  ✓ Key stored in macOS Keychain');
+        resolve(true);
+      } else {
+        console.log(`  ✗ ${result.message}`);
+        resolve(false);
+      }
+    });
+  });
+}
+
+/**
  * Show E2EE status and optionally prompt for import.
  */
 async function showE2EEStatus(promptForImport = true) {
   const e2eeStatus = setupE2EE();
 
   console.log('');
-  console.log(bold('E2EE (End-to-End Encryption)'));
+  console.log('  E2EE Status');
+  console.log('  ' + '-'.repeat(38));
 
   if (e2eeStatus.status === 'ready') {
-    console.log(`  ${green('✓')} E2EE ready - encrypted tasks will be decrypted`);
+    console.log('  ✓ End-to-end encryption ready');
+    console.log('  ✓ Encryption key available');
     return;
   }
 
-  if (e2eeStatus.status === 'not_enabled') {
-    console.log(`  ${dim('·')} E2EE helper ready`);
-    console.log(`  ${yellow('⚠')} No encryption key found in Keychain`);
-
-    if (promptForImport) {
-      // Check if user has encrypted todos
-      const hasEncrypted = await checkUserHasEncryptedTodos();
-      if (hasEncrypted) {
-        console.log('');
-        console.log('  Your account has encrypted tasks.');
-        console.log('  To decrypt them, import your key:');
-        console.log('');
-        console.log('  1. Open Push app on iPhone');
-        console.log('  2. Go to Settings > End-to-End Encryption');
-        console.log('  3. Tap "Export Encryption Key"');
-        console.log('  4. Run: push-todo connect --store-e2ee-key <key>');
+  if (e2eeStatus.status === 'compiled') {
+    console.log('  ✓ Compiled encryption helper from source');
+    if (e2eeStatus.sourcePath) {
+      console.log(`  📄 Source: ${e2eeStatus.sourcePath}`);
+    }
+    if (e2eeStatus.keyAvailable) {
+      console.log('  ✓ Encryption key available');
+    } else {
+      console.log('  ⚠️  No encryption key found');
+      if (promptForImport && await checkUserHasEncryptedTodos()) {
+        if (await importE2EEKey()) {
+          console.log('  ✓ E2EE setup complete!');
+        }
       }
     }
     return;
   }
 
-  if (e2eeStatus.status === 'compiled') {
-    console.log(`  ${green('✓')} Compiled encryption helper`);
-    if (e2eeStatus.keyAvailable) {
-      console.log(`  ${green('✓')} Encryption key available`);
+  if (e2eeStatus.status === 'not_enabled') {
+    console.log('  ✓ Encryption helper ready');
+    const hasEncrypted = await checkUserHasEncryptedTodos();
+    if (hasEncrypted) {
+      console.log('  ⚠️  No encryption key found (E2EE enabled on account)');
+      if (promptForImport) {
+        if (await importE2EEKey()) {
+          console.log('  ✓ E2EE setup complete!');
+        }
+      }
     } else {
-      console.log(`  ${yellow('⚠')} No encryption key (enable E2EE in iOS app)`);
+      console.log('  ℹ️  E2EE not enabled (no encrypted todos)');
     }
     return;
   }
 
   if (e2eeStatus.status === 'needs_setup') {
-    console.log(`  ${yellow('⚠')} ${e2eeStatus.message}`);
-    if (e2eeStatus.options) {
-      for (const opt of e2eeStatus.options) {
-        console.log(`    - ${opt}`);
-      }
-    }
+    console.log('  ⚠️  E2EE setup needed');
+    console.log('    Swift compiler not found. To enable E2EE:');
+    console.log('    → Run: xcode-select --install');
+    console.log('    → Then run: push-todo connect');
     return;
   }
 
-  console.log(`  ${yellow('⚠')} ${e2eeStatus.message}`);
+  console.log(`  ⚠️  E2EE error: ${e2eeStatus.message}`);
+
+  // Trust-building info
+  if (e2eeStatus.sourcePath && ['ready', 'compiled'].includes(e2eeStatus.status)) {
+    console.log('');
+    console.log('  🔐 Your encryption key:');
+    console.log('    • Stored securely in macOS Keychain');
+    console.log('    • Never sent to our servers');
+    console.log('    • Only your devices can decrypt');
+  }
 }
 
 // ============================================================================
@@ -382,35 +492,98 @@ async function showE2EEStatus(promptForImport = true) {
 // ============================================================================
 
 /**
- * Check if a newer version is available.
+ * Get remote version from npm/GitHub.
+ */
+async function getRemoteVersion() {
+  try {
+    const response = await fetch(REMOTE_PACKAGE_JSON_URL, {
+      headers: { 'User-Agent': 'push-cli/1.0' }
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.version || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse version string into comparable tuple.
+ */
+function parseVersion(versionStr) {
+  try {
+    return versionStr.split('.').map(p => parseInt(p, 10));
+  } catch {
+    return [0, 0, 0];
+  }
+}
+
+/**
+ * Check if an update is available.
  */
 async function checkVersion() {
-  const latest = await api.getLatestVersion();
+  const method = getInstallationMethod();
 
-  if (!latest) {
-    return { current: VERSION, latest: null, updateAvailable: false };
+  // Dev installation
+  if (method === 'development') {
+    return {
+      status: 'dev_installation',
+      current: VERSION,
+      latest: null,
+      updateAvailable: false,
+      message: `Dev installation (v${VERSION}) - use git pull to update`
+    };
   }
 
-  const currentParts = VERSION.split('.').map(Number);
-  const latestParts = latest.split('.').map(Number);
+  const remote = await getRemoteVersion();
+
+  if (!remote) {
+    return {
+      status: 'unknown',
+      current: VERSION,
+      latest: null,
+      updateAvailable: false,
+      message: 'Could not fetch remote version (network error)'
+    };
+  }
+
+  const localParts = parseVersion(VERSION);
+  const remoteParts = parseVersion(remote);
 
   let updateAvailable = false;
   for (let i = 0; i < 3; i++) {
-    if ((latestParts[i] || 0) > (currentParts[i] || 0)) {
+    if ((remoteParts[i] || 0) > (localParts[i] || 0)) {
       updateAvailable = true;
       break;
-    } else if ((latestParts[i] || 0) < (currentParts[i] || 0)) {
+    } else if ((remoteParts[i] || 0) < (localParts[i] || 0)) {
       break;
     }
   }
 
-  return { current: VERSION, latest, updateAvailable };
+  return {
+    status: updateAvailable ? 'update_available' : 'up_to_date',
+    current: VERSION,
+    latest: remote,
+    updateAvailable,
+    message: updateAvailable
+      ? `Update available: ${VERSION} → ${remote}`
+      : `Plugin is up to date (v${VERSION})`
+  };
 }
 
 /**
  * Update the package to latest version.
  */
 async function doUpdate() {
+  const method = getInstallationMethod();
+
+  if (method === 'development') {
+    return {
+      status: 'skipped',
+      message: 'Development installation - use git pull instead'
+    };
+  }
+
   console.log('Updating @masslessai/push-todo...');
 
   try {
@@ -471,7 +644,72 @@ async function validateMachineStatus() {
 }
 
 /**
- * Validate project registration.
+ * Validate project registration (full validation with warnings).
+ */
+function validateProjectInfo() {
+  const warnings = [];
+  const projectPath = process.cwd();
+  const gitRemoteRaw = getGitRemote();
+  const gitRemote = gitRemoteRaw ? normalizeGitRemote(gitRemoteRaw) : null;
+
+  // Check if git repo
+  const isGit = isGitRepo();
+  if (!isGit) {
+    warnings.push('Not a git repository (no .git folder)');
+  }
+
+  // Check git remote
+  if (isGit && !gitRemoteRaw) {
+    warnings.push("Git repo has no 'origin' remote configured");
+  }
+
+  if (gitRemoteRaw && !gitRemote) {
+    warnings.push(`Could not normalize git remote: ${gitRemoteRaw}`);
+  }
+
+  // Check local registry
+  let localRegistryStatus = 'not_registered';
+  if (gitRemote) {
+    const registry = getRegistry();
+    const registeredPath = registry.getPathWithoutUpdate(gitRemote);
+    if (registeredPath) {
+      if (registeredPath === projectPath) {
+        localRegistryStatus = 'registered';
+      } else {
+        localRegistryStatus = 'path_mismatch';
+        warnings.push(`Local registry has different path: ${registeredPath}`);
+      }
+    } else {
+      warnings.push("Project not in local registry (daemon won't route tasks here)");
+    }
+  }
+
+  // Determine overall status
+  let status;
+  if (!isGit || !gitRemote) {
+    status = 'warnings';
+  } else if (warnings.length > 0) {
+    status = 'warnings';
+  } else {
+    status = 'valid';
+  }
+
+  return {
+    status,
+    projectPath,
+    isGitRepo: isGit,
+    gitRemote,
+    gitRemoteRaw,
+    localRegistryStatus,
+    warnings,
+    message: status === 'valid'
+      ? `Project valid: ${gitRemote}`
+      : `Project has ${warnings.length} warning(s)`
+  };
+}
+
+/**
+ * Simple project validation (JSON output).
  */
 function validateProjectStatus() {
   if (!isGitRepo()) {
@@ -483,13 +721,14 @@ function validateProjectStatus() {
     return { status: 'no_remote', message: 'No git remote configured' };
   }
 
+  const normalized = normalizeGitRemote(gitRemote);
   const registry = getRegistry();
-  const isRegistered = registry.isRegistered(gitRemote);
-  const localPath = registry.getPathWithoutUpdate(gitRemote);
+  const isRegistered = registry.isRegistered(normalized);
+  const localPath = registry.getPathWithoutUpdate(normalized);
 
   return {
     status: isRegistered ? 'registered' : 'unregistered',
-    gitRemote,
+    gitRemote: normalized,
     localPath,
     gitRoot: getGitRoot()
   };
@@ -500,15 +739,67 @@ function validateProjectStatus() {
 // ============================================================================
 
 /**
- * Generate a random auth code for the authentication flow.
+ * Get device name for registration.
  */
-function generateAuthCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+function getDeviceName() {
+  try {
+    return require('os').hostname() || 'Unknown Device';
+  } catch {
+    return 'Unknown Device';
   }
-  return code;
+}
+
+/**
+ * Initiate device code flow.
+ */
+async function initiateDeviceFlow(clientType = 'claude-code') {
+  const clientName = CLIENT_NAMES[clientType] || 'Claude Code';
+
+  const response = await fetch(`${API_BASE}/device-auth/init`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': ANON_KEY
+    },
+    body: JSON.stringify({
+      client_name: clientName,
+      client_type: clientType,
+      client_version: VERSION,
+      device_name: getDeviceName(),
+      project_path: process.cwd(),
+      git_remote: getGitRemote()
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to initiate auth: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Poll for authorization status.
+ */
+async function pollStatus(deviceCode) {
+  const response = await fetch(`${API_BASE}/device-auth/poll`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': ANON_KEY
+    },
+    body: JSON.stringify({ device_code: deviceCode })
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    if (body.error === 'slow_down') {
+      return { status: 'slow_down', interval: body.interval || 10 };
+    }
+    throw new Error(`Poll failed: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 /**
@@ -518,121 +809,247 @@ function openBrowser(url) {
   try {
     if (process.platform === 'darwin') {
       execSync(`open "${url}"`, { stdio: 'ignore' });
+      return true;
     } else if (process.platform === 'linux') {
       execSync(`xdg-open "${url}"`, { stdio: 'ignore' });
+      return true;
     } else if (process.platform === 'win32') {
       execSync(`start "" "${url}"`, { stdio: 'ignore' });
+      return true;
     }
-  } catch {
-    console.log(`Please open this URL manually: ${url}`);
-  }
+  } catch {}
+  return false;
 }
 
 /**
- * Poll for authentication completion.
+ * Full device auth flow with browser sign-in.
  */
-async function pollForAuth(authCode, timeout = 300) {
+async function doFullDeviceAuth(clientType = 'claude-code') {
+  const clientName = CLIENT_NAMES[clientType] || 'Claude Code';
+
+  console.log('  Initializing...');
+
+  let deviceData;
+  try {
+    deviceData = await initiateDeviceFlow(clientType);
+  } catch (error) {
+    console.error(`  Error: Failed to initiate connection: ${error.message}`);
+    process.exit(1);
+  }
+
+  const deviceCode = deviceData.device_code;
+  const expiresIn = deviceData.expires_in;
+  let pollInterval = deviceData.interval || 5;
+
+  const authUrl = deviceData.verification_uri_complete ||
+    `https://pushto.do/auth/cli?code=${deviceCode}`;
+
+  console.log('');
+  console.log('  Opening browser for Sign in with Apple...');
+  console.log('');
+
+  const browserOpened = openBrowser(authUrl);
+
+  if (browserOpened) {
+    console.log("  If the browser didn't open, visit:");
+  } else {
+    console.log('  Open this URL in your browser:');
+  }
+  console.log(`  ${authUrl}`);
+  console.log('');
+  console.log(`  Waiting for authorization (${Math.floor(expiresIn / 60)} min timeout)...`);
+  console.log('  Press Ctrl+C to cancel');
+  console.log('');
+
   const startTime = Date.now();
-  const pollInterval = 2000;
 
-  while ((Date.now() - startTime) < timeout * 1000) {
+  while (true) {
+    const elapsed = (Date.now() - startTime) / 1000;
+    if (elapsed > expiresIn) {
+      console.log('');
+      console.log('  Error: Authorization timed out. Please run connect again.');
+      console.log('');
+      process.exit(1);
+    }
+
     try {
-      const response = await fetch(
-        `https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1/poll-auth?code=${authCode}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${ANON_KEY}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
+      const result = await pollStatus(deviceCode);
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.api_key) {
-          return data;
+      if (result.status === 'authorized') {
+        const apiKeyResult = result.api_key;
+        const email = result.email || 'Unknown';
+        const actionName = result.normalized_name || result.action_name || clientName;
+
+        if (apiKeyResult) {
+          return {
+            api_key: apiKeyResult,
+            email,
+            action_name: actionName
+          };
+        } else {
+          console.log('');
+          console.log('  Error: Authorization succeeded but no API key received.');
+          console.log('');
+          process.exit(1);
         }
       }
-    } catch {
-      // Ignore errors during polling
+
+      if (result.status === 'denied') {
+        console.log('');
+        console.log('  Authorization denied.');
+        console.log('');
+        process.exit(1);
+      }
+
+      if (result.status === 'expired') {
+        console.log('');
+        console.log('  Error: Authorization expired. Please run connect again.');
+        console.log('');
+        process.exit(1);
+      }
+
+      if (result.status === 'slow_down') {
+        pollInterval = result.interval || pollInterval + 5;
+      }
+
+      // Still pending
+      const remaining = Math.floor(expiresIn - elapsed);
+      const mins = Math.floor(remaining / 60);
+      const secs = remaining % 60;
+      process.stdout.write(`\r  Waiting... (${mins}:${secs.toString().padStart(2, '0')} remaining)   `);
+
+    } catch (error) {
+      process.stdout.write(`\r  Error: ${error.message}. Retrying...                 `);
     }
 
-    await setTimeout(pollInterval);
+    await sleep(pollInterval * 1000);
   }
-
-  return null;
 }
 
 /**
- * Run the authentication flow.
+ * Register project with backend.
  */
-async function runAuthFlow(clientType = 'claude-code') {
-  const authCode = generateAuthCode();
-  const authUrl = `https://pushto.do/connect?code=${authCode}&client=${clientType}`;
+async function registerProjectWithBackend(apiKey, clientType = 'claude-code', keywords = '', description = '') {
+  const clientName = CLIENT_NAMES[clientType] || 'Claude Code';
 
-  console.log('');
-  console.log(bold('Authentication Required'));
-  console.log('');
-  console.log(`Opening browser to: ${cyan(authUrl)}`);
-  console.log('');
-  console.log(`Or enter this code manually: ${bold(authCode)}`);
-  console.log('');
-  console.log(dim('Waiting for authentication...'));
+  const payload = {
+    client_type: clientType,
+    client_name: clientName,
+    device_name: getDeviceName(),
+    project_path: process.cwd(),
+    git_remote: getGitRemote()
+  };
 
-  openBrowser(authUrl);
+  if (keywords) payload.keywords = keywords;
+  if (description) payload.description = description;
 
-  const credentials = await pollForAuth(authCode);
+  const response = await fetch(`${API_BASE}/register-project`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': ANON_KEY,
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload)
+  });
 
-  if (!credentials) {
-    console.log(red('Authentication timed out. Please try again.'));
-    return false;
+  if (!response.ok) {
+    if (response.status === 401) {
+      return { status: 'unauthorized', message: 'API key invalid or revoked' };
+    }
+    const body = await response.json().catch(() => ({}));
+    return { status: 'error', message: body.error_description || `HTTP ${response.status}` };
   }
 
-  // Save credentials
-  saveCredentials(credentials.api_key, credentials.email);
+  const data = await response.json();
+  if (data.success) {
+    return {
+      status: 'success',
+      action_name: data.normalized_name || data.action_name || 'Unknown',
+      created: data.created !== false,
+      message: data.message || ''
+    };
+  }
 
-  console.log('');
-  console.log(green('✓ Authentication successful!'));
-  console.log(`  Logged in as: ${credentials.email}`);
-
-  return true;
+  return { status: 'error', message: 'Unknown error' };
 }
 
 /**
- * Register the current project.
+ * Register project in local registry for daemon routing.
  */
-async function registerCurrentProject(keywords = [], description = '', clientType = 'claude-code') {
-  const gitRemote = getGitRemote();
-  const gitRoot = getGitRoot();
+function registerProjectLocally(gitRemoteRaw, localPath) {
+  if (!gitRemoteRaw) return false;
 
-  if (!gitRemote || !gitRoot) {
-    console.log(yellow('Cannot register: not in a git repository with a remote.'));
-    return false;
-  }
+  const gitRemote = normalizeGitRemote(gitRemoteRaw);
+  if (!gitRemote) return false;
 
-  // Register locally
   const registry = getRegistry();
-  const isNew = registry.register(gitRemote, gitRoot);
-
-  // Register with backend
-  try {
-    await api.registerProject(gitRemote, keywords, description);
-    console.log(green(`✓ Project registered: ${gitRemote}`));
-    if (isNew) {
-      console.log(dim(`  Local path: ${gitRoot}`));
-    }
-    return true;
-  } catch (error) {
-    console.log(yellow(`Local registration OK, but backend registration failed: ${error.message}`));
-    return false;
-  }
+  return registry.register(gitRemote, localPath);
 }
 
 /**
- * Print a status line with icon.
+ * Show migration hint for legacy installations.
  */
-function printStatus(icon, label, value) {
-  console.log(`  ${icon} ${label}: ${value}`);
+function showMigrationHint() {
+  const method = getInstallationMethod();
+
+  if (method === 'npm-local') {
+    console.log('');
+    console.log('  ' + '-'.repeat(50));
+    console.log('  TIP: You have a local installation.');
+    console.log('  For global access, install globally:');
+    console.log('');
+    console.log('    npm install -g @masslessai/push-todo');
+    console.log('');
+    console.log('  ' + '-'.repeat(50));
+  }
+}
+
+// ============================================================================
+// STATUS DISPLAY
+// ============================================================================
+
+/**
+ * Show current connection status.
+ */
+async function showStatus() {
+  console.log('');
+  console.log('  Push Connection Status');
+  console.log('  ' + '='.repeat(40));
+  console.log('');
+
+  let existingKey, existingEmail;
+  try {
+    existingKey = getApiKey();
+  } catch {}
+  existingEmail = getEmail();
+
+  if (existingKey && existingEmail) {
+    console.log(`  ✓ Connected as ${existingEmail}`);
+    console.log(`  ✓ API key: ${existingKey.slice(0, 16)}...`);
+    console.log('');
+    console.log('  Current project:');
+    const gitRemote = getGitRemote();
+    if (gitRemote) {
+      console.log(`    Git remote: ${gitRemote}`);
+    } else {
+      console.log(`    Path: ${process.cwd()}`);
+    }
+    console.log('');
+    console.log("  Run 'push-todo connect' to register this project.");
+    console.log("  Run 'push-todo connect --reauth' to re-authenticate.");
+  } else if (existingKey) {
+    console.log('  ⚠ Partial config (missing email)');
+    console.log(`    API key: ${existingKey.slice(0, 16)}...`);
+    console.log('');
+    console.log("  Run 'push-todo connect --reauth' to fix.");
+  } else {
+    console.log('  ✗ Not connected');
+    console.log('');
+    console.log("  Run 'push-todo connect' to connect your Push account.");
+  }
+
+  console.log('');
 }
 
 // ============================================================================
@@ -648,7 +1065,8 @@ export async function runConnect(options = {}) {
   // Self-healing: ensure daemon is running
   ensureDaemonRunning();
 
-  const clientType = options.client || 'claude-code';
+  // Auto-detect client type from installation method
+  let clientType = options.client || 'claude-code';
   const clientName = CLIENT_NAMES[clientType] || 'Claude Code';
 
   // Handle --check-version (JSON output)
@@ -702,7 +1120,7 @@ export async function runConnect(options = {}) {
 
   // Handle --reauth
   if (options.reauth) {
-    console.log('Forcing re-authentication...');
+    console.log('  Forcing re-authentication...');
     clearCredentials();
   }
 
@@ -711,138 +1129,159 @@ export async function runConnect(options = {}) {
   // ─────────────────────────────────────────────────────────────────
 
   console.log('');
-  console.log(bold(`Push Connect - ${clientName}`));
-  console.log(dim('='.repeat(40)));
+  console.log(`  Push Voice Tasks Connect`);
+  console.log('  ' + '='.repeat(40));
   console.log('');
 
-  let allPassed = true;
+  let existingKey, existingEmail;
+  try {
+    existingKey = getApiKey();
+  } catch {}
+  existingEmail = getEmail();
 
-  // Step 1: Version check
-  console.log(bold('1. Version Check'));
-  const versionStatus = await checkVersion();
-  if (versionStatus.updateAvailable) {
-    printStatus(yellow('⚠'), 'Version', `${versionStatus.current} → ${versionStatus.latest} available`);
-    console.log(dim(`   Update: npm update -g @masslessai/push-todo`));
-    allPassed = false;
-  } else {
-    printStatus(green('✓'), 'Version', `${versionStatus.current} (latest)`);
-  }
-  console.log('');
+  const keywords = options.keywords || '';
+  const description = options.description || '';
 
-  // Step 2: API Key validation
-  console.log(bold('2. API Key'));
-  let keyStatus = await validateApiKeyStatus();
+  if (existingKey && existingEmail && !options.reauth) {
+    // ─────────────────────────────────────────────────────────────────
+    // FAST PATH: Already authenticated, just register project
+    // ─────────────────────────────────────────────────────────────────
+    console.log(`  Connected as ${existingEmail}`);
+    console.log('  Registering project...');
 
-  if (keyStatus.status === 'missing' || keyStatus.status === 'invalid') {
-    printStatus(red('✗'), 'API Key', keyStatus.message || 'Invalid');
-    console.log('');
+    const result = await registerProjectWithBackend(existingKey, clientType, keywords, description);
 
-    // Run auth flow
-    const authSuccess = await runAuthFlow(clientType);
-    if (authSuccess) {
-      keyStatus = await validateApiKeyStatus();
+    if (result.status === 'success') {
+      // Register in local project registry for global daemon routing
+      const gitRemoteRaw = getGitRemote();
+      const localPath = process.cwd();
+      const isNewLocal = registerProjectLocally(gitRemoteRaw, localPath);
+
+      console.log('');
+      console.log('  ' + '='.repeat(40));
+      if (result.created) {
+        console.log(`  Created action: "${result.action_name}"`);
+      } else {
+        console.log(`  Found existing action: "${result.action_name}"`);
+      }
+
+      // Validate and show project info
+      const projectInfo = validateProjectInfo();
+      if (projectInfo.gitRemote) {
+        console.log(`  Git remote: ${projectInfo.gitRemote}`);
+      }
+      for (const warning of projectInfo.warnings) {
+        console.log(`  ⚠️  ${warning}`);
+      }
+
+      // Show local registry status
+      if (gitRemoteRaw) {
+        if (isNewLocal) {
+          console.log(`  Local path registered: ${localPath}`);
+        } else {
+          console.log(`  Local path updated: ${localPath}`);
+        }
+      }
+
+      // Validate and show machine ID
+      const machineInfo = await validateMachineStatus();
+      if (machineInfo.status === 'valid') {
+        console.log(`  Machine: ${machineInfo.machineName}`);
+      } else {
+        console.log(`  ⚠️  Machine ID: ${machineInfo.message}`);
+      }
+      console.log('  ' + '='.repeat(40));
+      console.log('');
+
+      if (result.created) {
+        console.log('  Your iOS app will sync this automatically.');
+      } else {
+        console.log('  This project is already configured.');
+      }
+
+      // Show E2EE status
+      await showE2EEStatus();
+
+      // Show migration hint
+      showMigrationHint();
+      console.log('');
+      return;
+    }
+
+    if (result.status === 'unauthorized') {
+      console.log('');
+      console.log('  Session expired, re-authenticating...');
+      console.log('');
+      clearCredentials();
+      // Fall through to full auth
     } else {
-      allPassed = false;
+      console.log('');
+      console.log(`  Registration failed: ${result.message || 'Unknown error'}`);
+      console.log('  Trying full connection...');
+      console.log('');
+      // Fall through to full auth
     }
   }
 
-  if (keyStatus.status === 'valid') {
-    printStatus(green('✓'), 'API Key', `Valid (${keyStatus.email})`);
-  }
-  console.log('');
+  // ─────────────────────────────────────────────────────────────────────
+  // SLOW PATH: First time or re-auth needed
+  // ─────────────────────────────────────────────────────────────────────
+  const isReauth = existingKey !== undefined;
 
-  // Step 3: Machine validation
-  console.log(bold('3. Machine'));
-  const machineStatus = await validateMachineStatus();
-  if (machineStatus.status === 'valid') {
-    printStatus(green('✓'), 'Machine', machineStatus.machineName);
-    printStatus(dim('·'), 'ID', machineStatus.machineId);
+  const authResult = await doFullDeviceAuth(clientType);
+
+  // Save credentials
+  saveCredentials(authResult.api_key, authResult.email);
+
+  // Register in local project registry for global daemon routing
+  const gitRemoteRaw = getGitRemote();
+  const localPath = process.cwd();
+  const isNewLocal = registerProjectLocally(gitRemoteRaw, localPath);
+
+  // Show success
+  console.log('');
+  console.log('  ' + '='.repeat(40));
+  if (isReauth) {
+    console.log(`  Re-connected as ${authResult.email}`);
   } else {
-    printStatus(yellow('⚠'), 'Machine', machineStatus.message || 'Not validated');
-    allPassed = false;
+    console.log(`  Connected as ${authResult.email}`);
   }
-  console.log('');
+  console.log(`  Created action: "${authResult.action_name}"`);
 
-  // Step 4: Project validation
-  console.log(bold('4. Project'));
-  const projectStatus = validateProjectStatus();
+  // Validate and show project info
+  const projectInfo = validateProjectInfo();
+  if (projectInfo.gitRemote) {
+    console.log(`  Git remote: ${projectInfo.gitRemote}`);
+  }
+  for (const warning of projectInfo.warnings) {
+    console.log(`  ⚠️  ${warning}`);
+  }
 
-  if (projectStatus.status === 'registered') {
-    printStatus(green('✓'), 'Project', projectStatus.gitRemote);
-    printStatus(dim('·'), 'Path', projectStatus.localPath);
-  } else if (projectStatus.status === 'unregistered') {
-    printStatus(yellow('⚠'), 'Project', `${projectStatus.gitRemote} (not registered)`);
-    console.log('');
-
-    // Offer to register
-    if (keyStatus.status === 'valid') {
-      const keywords = options.keywords ? options.keywords.split(',').map(k => k.trim()) : [];
-      const description = options.description || '';
-      await registerCurrentProject(keywords, description, clientType);
+  // Show local registry status
+  if (gitRemoteRaw) {
+    if (isNewLocal) {
+      console.log(`  Local path registered: ${localPath}`);
+    } else {
+      console.log(`  Local path updated: ${localPath}`);
     }
-  } else if (projectStatus.status === 'no_remote') {
-    printStatus(yellow('⚠'), 'Project', 'No git remote configured');
-    allPassed = false;
-  } else {
-    printStatus(dim('·'), 'Project', 'Not in a git repository');
-  }
-  console.log('');
-
-  // Step 5: E2EE check
-  console.log(bold('5. E2EE (End-to-End Encryption)'));
-  await showE2EEStatus(true);
-  console.log('');
-
-  // Summary
-  console.log(dim('='.repeat(40)));
-  if (allPassed) {
-    console.log(green(bold('All checks passed!')));
-  } else {
-    console.log(yellow('Some checks need attention. See above for details.'));
-  }
-  console.log('');
-}
-
-/**
- * Show current status without registering.
- */
-async function showStatus() {
-  console.log('');
-  console.log(bold('Push Status'));
-  console.log(dim('='.repeat(40)));
-  console.log('');
-
-  // Version
-  console.log(`Version: ${VERSION}`);
-
-  // Account
-  const email = getEmail();
-  if (email) {
-    console.log(`Account: ${email}`);
-  } else {
-    console.log('Account: Not connected');
   }
 
-  // Machine
-  const machineName = getMachineName();
-  const machineId = getMachineId();
-  console.log(`Machine: ${machineName}`);
-  console.log(`Machine ID: ${machineId.slice(-8)}`);
-
-  // Project
-  const projectStatus = validateProjectStatus();
-  if (projectStatus.status === 'registered') {
-    console.log(`Project: ${projectStatus.gitRemote}`);
-  } else if (projectStatus.gitRemote) {
-    console.log(`Project: ${projectStatus.gitRemote} (not registered)`);
+  // Validate and show machine ID
+  const machineInfo = await validateMachineStatus();
+  if (machineInfo.status === 'valid') {
+    console.log(`  Machine: ${machineInfo.machineName}`);
   } else {
-    console.log('Project: Not in a git repository');
+    console.log(`  ⚠️  Machine ID: ${machineInfo.message}`);
   }
+  console.log('  ' + '='.repeat(40));
+  console.log('');
+  console.log('  Your iOS app will sync this automatically.');
 
-  // E2EE
-  const [e2eeAvailable] = isE2EEAvailable();
-  console.log(`E2EE: ${e2eeAvailable ? 'Available' : 'Not available'}`);
+  // Show E2EE status
+  await showE2EEStatus();
 
+  // Show migration hint
+  showMigrationHint();
   console.log('');
 }
 
@@ -852,8 +1291,10 @@ export {
   validateApiKeyStatus,
   validateMachineStatus,
   validateProjectStatus,
+  validateProjectInfo,
   setupE2EE,
   storeE2EEKeyDirect,
   showStatus,
+  getInstallationMethod,
   VERSION
 };

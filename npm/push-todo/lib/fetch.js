@@ -294,7 +294,8 @@ export async function showStatus(options = {}) {
 
   // API
   if (status.api.valid) {
-    console.log(`${bold('API:')} ${green('Connected')} (${status.api.email})`);
+    const emailPart = status.api.email ? ` (${status.api.email})` : '';
+    console.log(`${bold('API:')} ${green('Connected')}${emailPart}`);
   } else {
     console.log(`${bold('API:')} ${red('Not connected')} - run "push-todo connect"`);
   }

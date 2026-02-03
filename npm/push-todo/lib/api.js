@@ -244,11 +244,16 @@ export async function updateTaskExecution(payload) {
 /**
  * Validate API key.
  *
+ * Uses synced-todos with limit=0 as a lightweight validation check.
+ * This matches the Python implementation approach.
+ *
  * @returns {Promise<Object>} Validation result with user info
  */
 export async function validateApiKey() {
   try {
-    const response = await apiRequest('validate-api-key');
+    // Use synced-todos with limit=0 as lightweight validation
+    // (no validate-api-key endpoint exists)
+    const response = await apiRequest('synced-todos?limit=0');
 
     if (!response.ok) {
       if (response.status === 401) {
@@ -257,11 +262,10 @@ export async function validateApiKey() {
       return { valid: false, reason: 'api_error' };
     }
 
-    const data = await response.json();
+    // Key is valid if request succeeds
+    // Note: synced-todos doesn't return user info, so we mark as valid without email
     return {
-      valid: true,
-      userId: data.user_id,
-      email: data.email
+      valid: true
     };
   } catch (error) {
     return { valid: false, reason: 'network_error', error: error.message };
