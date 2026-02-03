@@ -144,7 +144,8 @@ function migrateFromPython() {
 
 /**
  * Set up OpenAI Codex integration.
- * Creates ~/.codex/skills/push-todo/SKILL.md and updates AGENTS.md
+ * Creates symlink ~/.codex/skills/push-todo -> npm package
+ * Updates AGENTS.md for session bootstrap
  *
  * @returns {boolean} True if Codex was detected and set up
  */
@@ -156,54 +157,7 @@ function setupCodex() {
 
   console.log('[push-todo] Detected OpenAI Codex installation');
 
-  // Skill file content
-  const SKILL_CONTENT = `# Push Tasks Skill
-
-This skill retrieves and processes tasks sent from the Push iOS app.
-
-## Activation
-
-This skill activates when the user:
-- Says "push-todo", "push todo", "push tasks", or "tasks from push"
-- Runs \`$push-todo\` command
-- Mentions "tasks from iPhone" or "mobile tasks"
-- Asks about "pending tasks" or "voice tasks"
-
-## Commands
-
-Run these in the terminal:
-
-| Command | Description |
-|---------|-------------|
-| \`push-todo\` | List active tasks |
-| \`push-todo 427\` | Show task #427 |
-| \`push-todo connect\` | Connect/fix issues |
-| \`push-todo search "query"\` | Search tasks |
-| \`push-todo --help\` | All options |
-
-## Instructions
-
-When this skill is activated:
-
-1. **Check connection** - If user hasn't set up, run:
-   \`\`\`bash
-   push-todo connect
-   \`\`\`
-
-2. **Fetch tasks** - List available tasks:
-   \`\`\`bash
-   push-todo
-   \`\`\`
-
-3. **Work on specific task** - Get task details:
-   \`\`\`bash
-   push-todo 427
-   \`\`\`
-
-4. **Present the task** to the user with a brief summary and offer to help implement it.
-`;
-
-  // AGENTS.md bootstrap content
+  // AGENTS.md bootstrap content (Codex-specific)
   const AGENTS_SECTION = `
 ## Push Tasks Integration
 
@@ -221,16 +175,38 @@ At the start of each session, check for pending tasks from the Push iOS app:
 `;
 
   try {
-    // Create skill directory and SKILL.md
-    mkdirSync(CODEX_SKILL_DIR, { recursive: true });
-    writeFileSync(CODEX_SKILL_FILE, SKILL_CONTENT);
-    console.log('[push-todo] Codex: Created skills/push-todo/SKILL.md');
+    // Ensure skills directory exists
+    const skillsDir = join(CODEX_DIR, 'skills');
+    mkdirSync(skillsDir, { recursive: true });
+
+    // Create symlink (same as Claude Code approach)
+    if (existsSync(CODEX_SKILL_DIR)) {
+      const stats = lstatSync(CODEX_SKILL_DIR);
+      if (stats.isSymbolicLink()) {
+        const target = readlinkSync(CODEX_SKILL_DIR);
+        if (target === PACKAGE_ROOT) {
+          console.log('[push-todo] Codex: Symlink already configured');
+        } else {
+          unlinkSync(CODEX_SKILL_DIR);
+          symlinkSync(PACKAGE_ROOT, CODEX_SKILL_DIR);
+          console.log('[push-todo] Codex: Updated symlink');
+        }
+      } else {
+        // It's a directory (old copy) - remove and replace with symlink
+        rmSync(CODEX_SKILL_DIR, { recursive: true });
+        symlinkSync(PACKAGE_ROOT, CODEX_SKILL_DIR);
+        console.log('[push-todo] Codex: Replaced copy with symlink');
+      }
+    } else {
+      symlinkSync(PACKAGE_ROOT, CODEX_SKILL_DIR);
+      console.log('[push-todo] Codex: Created symlink');
+    }
 
     // Update AGENTS.md for session-start bootstrap
     if (existsSync(CODEX_AGENTS_FILE)) {
       const content = readFileSync(CODEX_AGENTS_FILE, 'utf8');
       if (content.includes('Push Tasks Integration')) {
-        // Update existing section (replace old Python references)
+        // Update existing section
         const updated = content.replace(
           /## Push Tasks Integration[\s\S]*?(?=\n## |$)/,
           AGENTS_SECTION.trim() + '\n\n'
@@ -255,7 +231,7 @@ At the start of each session, check for pending tasks from the Push iOS app:
 
 /**
  * Set up Clawdbot integration.
- * Creates ~/.clawdbot/skills/push-todo/SKILL.md
+ * Creates symlink ~/.clawdbot/skills/push-todo -> npm package
  *
  * @returns {boolean} True if Clawdbot was detected and set up
  */
@@ -267,60 +243,37 @@ function setupClawdbot() {
 
   console.log('[push-todo] Detected Clawdbot installation');
 
-  const SKILL_CONTENT = `# Push Tasks
-
-Voice tasks captured on iPhone, ready to work on.
-
-## Commands
-
-Run these in the terminal:
-
-| Command | Description |
-|---------|-------------|
-| \`push-todo\` | List active tasks |
-| \`push-todo 427\` | Show task #427 |
-| \`push-todo connect\` | Connect/fix issues |
-| \`push-todo search "query"\` | Search tasks |
-| \`push-todo --help\` | All options |
-
-## Quick Start
-
-If not connected yet, run:
-\`\`\`bash
-push-todo connect
-\`\`\`
-
-To see tasks:
-\`\`\`bash
-push-todo
-\`\`\`
-
-To work on a specific task:
-\`\`\`bash
-push-todo 427
-\`\`\`
-
-## Session Start
-
-At the start of each session, check for tasks:
-\`\`\`bash
-push-todo --json 2>/dev/null | head -1
-\`\`\`
-If tasks exist, inform the user.
-`;
-
   try {
-    mkdirSync(CLAWDBOT_SKILL_DIR, { recursive: true });
+    // Ensure skills directory exists
+    const skillsDir = join(CLAWDBOT_DIR, 'skills');
+    mkdirSync(skillsDir, { recursive: true });
 
-    if (existsSync(CLAWDBOT_SKILL_FILE)) {
-      console.log('[push-todo] Clawdbot: SKILL.md already exists, updating...');
+    // Create symlink (same as Claude Code approach)
+    if (existsSync(CLAWDBOT_SKILL_DIR)) {
+      const stats = lstatSync(CLAWDBOT_SKILL_DIR);
+      if (stats.isSymbolicLink()) {
+        const target = readlinkSync(CLAWDBOT_SKILL_DIR);
+        if (target === PACKAGE_ROOT) {
+          console.log('[push-todo] Clawdbot: Symlink already configured');
+        } else {
+          unlinkSync(CLAWDBOT_SKILL_DIR);
+          symlinkSync(PACKAGE_ROOT, CLAWDBOT_SKILL_DIR);
+          console.log('[push-todo] Clawdbot: Updated symlink');
+        }
+      } else {
+        // It's a directory (old copy) - remove and replace with symlink
+        rmSync(CLAWDBOT_SKILL_DIR, { recursive: true });
+        symlinkSync(PACKAGE_ROOT, CLAWDBOT_SKILL_DIR);
+        console.log('[push-todo] Clawdbot: Replaced copy with symlink');
+      }
+    } else {
+      symlinkSync(PACKAGE_ROOT, CLAWDBOT_SKILL_DIR);
+      console.log('[push-todo] Clawdbot: Created symlink');
     }
 
-    writeFileSync(CLAWDBOT_SKILL_FILE, SKILL_CONTENT);
-    console.log('[push-todo] Clawdbot: Created skills/push-todo/SKILL.md');
     return true;
   } catch (error) {
-    console.log(`[push-todo] Clawdbot: Could not set up SKILL.md: ${error.message}`);
+    console.log(`[push-todo] Clawdbot: Setup failed: ${error.message}`);
     return false;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@masslessai/push-todo",
-  "version": "3.2.1",
+  "version": "3.3.0",
   "description": "Voice tasks from Push iOS app for Claude Code",
   "type": "module",
   "bin": {
