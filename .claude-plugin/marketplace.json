@@ -9,7 +9,7 @@
     {
       "name": "push-todo",
       "description": "Receive and work on voice tasks captured on your iPhone",
-      "source": "./plugins/push-todo"
+      "source": "./npm/push-todo"
     }
   ]
 }
