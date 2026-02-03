@@ -126,10 +126,9 @@ jobs:
       - name: List binaries
         run: ls -la binaries/
 
-      # OIDC Trusted Publishing - npm authenticates via GitHub's OIDC token
       - name: Publish to npm
         working-directory: npm/push-todo
-        run: npm publish --access public
+        run: npm publish --access public --provenance
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
