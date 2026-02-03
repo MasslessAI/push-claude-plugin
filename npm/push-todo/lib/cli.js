@@ -15,7 +15,7 @@ import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '.
 import { getScreenshotPath, screenshotExists, openScreenshot } from './utils/screenshots.js';
 import { bold, red, cyan, dim, green } from './utils/colors.js';
 
-const VERSION = '3.0.5';
+const VERSION = '3.0.6';
 
 const HELP_TEXT = `
 ${bold('push-todo')} - Voice tasks from Push iOS app for Claude Code
@@ -423,6 +423,15 @@ export async function run(argv) {
   // Review command
   if (command === 'review') {
     return fetch.runReview(values);
+  }
+
+  // Setting command (positional form: push-todo setting [name])
+  if (command === 'setting') {
+    const settingName = positionals[1];
+    if (settingName) {
+      return toggleSetting(settingName);
+    }
+    return showSettings();
   }
 
   // Search command (positional form)

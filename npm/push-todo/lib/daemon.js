@@ -8,14 +8,19 @@
  * Architecture:
  * - Git branch = worktree = Claude session (1:1:1 mapping)
  * - Uses Claude's --continue to resume sessions in worktrees
- * - Certainty analysis determines execution mode
+ * - Certainty analysis determines execution mode (immediate, planning, or clarify)
+ *
+ * Certainty-Based Execution:
+ * - High certainty (>= 0.7): Execute immediately in standard mode
+ * - Medium certainty (0.4-0.7): Execute with --plan flag (planning mode first)
+ * - Low certainty (< 0.4): Update todo with clarification questions, skip execution
  *
  * Ported from: plugins/push-todo/scripts/daemon.py
  */
 
-import { spawn, execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync } from 'fs';
-import { homedir } from 'os';
+import { spawn, execSync, execFileSync } from 'child_process';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync, statSync, renameSync } from 'fs';
+import { homedir, hostname, platform } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -28,12 +33,46 @@ const API_BASE_URL = 'https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1';
 const POLL_INTERVAL = 30000; // 30 seconds
 const MAX_CONCURRENT_TASKS = 5;
 const TASK_TIMEOUT_MS = 3600000; // 1 hour
+
+// Retry configuration
 const RETRY_MAX_ATTEMPTS = 3;
 const RETRY_INITIAL_DELAY = 2000;
+const RETRY_MAX_DELAY = 30000;
+const RETRY_BACKOFF_FACTOR = 2;
 
-// Certainty thresholds (same as Python)
+// Certainty thresholds
 const CERTAINTY_HIGH_THRESHOLD = 0.7;
 const CERTAINTY_LOW_THRESHOLD = 0.4;
+
+// Stuck detection
+const STUCK_IDLE_THRESHOLD = 600000; // 10 min
+const STUCK_WARNING_THRESHOLD = 300000; // 5 min
+
+// Stuck patterns that indicate Claude is waiting for input
+const STUCK_PATTERNS = [
+  'waiting for permission',
+  'approve this action',
+  'permission required',
+  'plan ready for approval',
+  'waiting for user',
+  'enter plan mode',
+  'press enter to continue',
+  'y/n',
+  '[Y/n]',
+  'confirm:'
+];
+
+// Retryable error patterns
+const RETRYABLE_ERRORS = [
+  'timeout', 'connection refused', 'connection reset',
+  'network is unreachable', 'temporary failure', 'rate limit',
+  '429', '502', '503', '504'
+];
+
+// Notification settings
+const NOTIFY_ON_COMPLETE = true;
+const NOTIFY_ON_FAILURE = true;
+const NOTIFY_ON_NEEDS_INPUT = true;
 
 // Paths
 const PUSH_DIR = join(homedir(), '.push');
@@ -43,13 +82,49 @@ const LOG_FILE = join(PUSH_DIR, 'daemon.log');
 const STATUS_FILE = join(PUSH_DIR, 'daemon_status.json');
 const VERSION_FILE = join(PUSH_DIR, 'daemon.version');
 const CONFIG_FILE = join(CONFIG_DIR, 'config');
+const MACHINE_ID_FILE = join(CONFIG_DIR, 'machine_id');
+const REGISTRY_FILE = join(CONFIG_DIR, 'projects.json');
+
+// Log rotation settings
+const LOG_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+const LOG_BACKUP_COUNT = 3;
 
 // State
-const runningTasks = new Map(); // displayNumber -> { process, task, startTime }
+const runningTasks = new Map(); // displayNumber -> taskInfo
+const taskDetails = new Map();  // displayNumber -> details
 const completedToday = [];
-let startedAt = null;
+const taskLastOutput = new Map(); // displayNumber -> timestamp
+const taskStdoutBuffer = new Map(); // displayNumber -> lines[]
+const taskProjectPaths = new Map(); // displayNumber -> projectPath
+let daemonStartTime = null;
 
 // ==================== Logging ====================
+
+function rotateLogs() {
+  try {
+    if (!existsSync(LOG_FILE)) return;
+
+    const stats = statSync(LOG_FILE);
+    if (stats.size < LOG_MAX_SIZE) return;
+
+    // Rotate existing backups
+    for (let i = LOG_BACKUP_COUNT; i > 0; i--) {
+      const oldBackup = `${LOG_FILE}.${i}`;
+      const newBackup = `${LOG_FILE}.${i + 1}`;
+
+      if (i === LOG_BACKUP_COUNT && existsSync(oldBackup)) {
+        unlinkSync(oldBackup);
+      } else if (existsSync(oldBackup)) {
+        renameSync(oldBackup, newBackup);
+      }
+    }
+
+    // Rotate current log
+    renameSync(LOG_FILE, `${LOG_FILE}.1`);
+  } catch {
+    // Non-critical - continue even if rotation fails
+  }
+}
 
 function log(message, level = 'INFO') {
   const timestamp = new Date().toISOString();
@@ -66,6 +141,26 @@ function log(message, level = 'INFO') {
 
 function logError(message) {
   log(message, 'ERROR');
+}
+
+// ==================== Mac Notifications ====================
+
+function sendMacNotification(title, message, sound = 'default') {
+  if (platform() !== 'darwin') return;
+
+  try {
+    const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escapedMessage = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+    let script = `display notification "${escapedMessage}" with title "${escapedTitle}"`;
+    if (sound && sound !== 'default') {
+      script += ` sound name "${sound}"`;
+    }
+
+    execSync(`osascript -e '${script}'`, { timeout: 5000, stdio: 'pipe' });
+  } catch {
+    // Non-critical
+  }
 }
 
 // ==================== Config ====================
@@ -87,46 +182,172 @@ function getApiKey() {
 }
 
 function getMachineId() {
-  const machineIdFile = join(CONFIG_DIR, 'machine_id');
-  if (existsSync(machineIdFile)) {
+  if (existsSync(MACHINE_ID_FILE)) {
     try {
-      return readFileSync(machineIdFile, 'utf8').trim();
+      return readFileSync(MACHINE_ID_FILE, 'utf8').trim();
     } catch {}
   }
   return null;
 }
 
+function getMachineName() {
+  return hostname();
+}
+
+function getVersion() {
+  try {
+    const pkgPath = join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return pkg.version || '3.0.0';
+  } catch {
+    return '3.0.0';
+  }
+}
+
+// ==================== E2EE Decryption ====================
+
+let decryptTodoField = null;
+let e2eeAvailable = false;
+
+try {
+  const encryption = await import('./encryption.js');
+  decryptTodoField = encryption.decryptTodoField;
+  const [available] = encryption.isE2EEAvailable();
+  e2eeAvailable = available;
+} catch {
+  e2eeAvailable = false;
+}
+
+function decryptTaskFields(task) {
+  if (!e2eeAvailable || !decryptTodoField) {
+    return task;
+  }
+
+  const decrypted = { ...task };
+  const encryptedFields = [
+    'summary', 'content', 'normalizedContent', 'normalized_content',
+    'originalTranscript', 'original_transcript', 'transcript', 'title'
+  ];
+
+  for (const field of encryptedFields) {
+    if (decrypted[field]) {
+      decrypted[field] = decryptTodoField(decrypted[field]);
+    }
+  }
+
+  return decrypted;
+}
+
+// ==================== Certainty Analysis ====================
+
+let CertaintyAnalyzer = null;
+let getExecutionMode = null;
+
+try {
+  const certainty = await import('./certainty.js');
+  CertaintyAnalyzer = certainty.CertaintyAnalyzer;
+  getExecutionMode = certainty.getExecutionMode;
+} catch {
+  // Certainty analysis not available
+}
+
+function analyzeTaskCertainty(task) {
+  if (!CertaintyAnalyzer) {
+    log('Certainty analysis not available, executing directly');
+    return null;
+  }
+
+  const content = task.normalizedContent || task.normalized_content ||
+    task.content || task.summary || '';
+  const summary = task.summary;
+  const transcript = task.originalTranscript || task.original_transcript;
+
+  try {
+    const analyzer = new CertaintyAnalyzer();
+    const analysis = analyzer.analyze(content, summary, transcript);
+
+    const displayNum = task.displayNumber || task.display_number;
+    log(`Task #${displayNum} certainty: ${analysis.score} (${analysis.level})`);
+
+    if (analysis.reasons && analysis.reasons.length > 0) {
+      for (const reason of analysis.reasons.slice(0, 3)) {
+        log(`  - ${reason.factor}: ${reason.explanation}`);
+      }
+    }
+
+    return analysis;
+  } catch (e) {
+    log(`Certainty analysis failed: ${e.message}`);
+    return null;
+  }
+}
+
+function determineExecutionMode(analysis) {
+  if (!analysis || !getExecutionMode) {
+    return 'immediate';
+  }
+  return getExecutionMode(analysis);
+}
+
 // ==================== API ====================
 
-async function apiRequest(endpoint, options = {}) {
+function isRetryableError(error) {
+  const errorStr = String(error).toLowerCase();
+  return RETRYABLE_ERRORS.some(pattern => errorStr.includes(pattern.toLowerCase()));
+}
+
+async function apiRequest(endpoint, options = {}, retry = true) {
   const apiKey = getApiKey();
   if (!apiKey) {
     throw new Error('No API key configured');
   }
 
   const url = `${API_BASE_URL}/${endpoint}`;
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      ...options.headers
-    }
-  });
+  const maxAttempts = retry ? RETRY_MAX_ATTEMPTS : 1;
+  let delay = RETRY_INITIAL_DELAY;
 
-  return response;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          ...options.headers
+        }
+      });
+
+      clearTimeout(timeout);
+      return response;
+    } catch (error) {
+      const isLast = attempt === maxAttempts;
+
+      if (!isLast && retry && isRetryableError(error)) {
+        log(`API request failed (attempt ${attempt}/${maxAttempts}): ${error.message}`);
+        log(`Retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * RETRY_BACKOFF_FACTOR, RETRY_MAX_DELAY);
+      } else {
+        throw error;
+      }
+    }
+  }
 }
 
 async function fetchQueuedTasks() {
   try {
     const machineId = getMachineId();
     const params = new URLSearchParams();
-    params.set('status', 'queued');
+    params.set('execution_status', 'queued');
     if (machineId) {
       params.set('machine_id', machineId);
     }
 
-    const response = await apiRequest(`queued-tasks?${params}`);
+    const response = await apiRequest(`synced-todos?${params}`);
 
     if (!response.ok) {
       if (response.status === 404) return [];
@@ -134,7 +355,7 @@ async function fetchQueuedTasks() {
     }
 
     const data = await response.json();
-    return data.tasks || [];
+    return data.todos || [];
   } catch (error) {
     logError(`Failed to fetch queued tasks: ${error.message}`);
     return [];
@@ -149,14 +370,65 @@ async function updateTaskStatus(displayNumber, status, extra = {}) {
       ...extra
     };
 
+    const machineId = getMachineId();
+    const machineName = getMachineName();
+    if (machineId) {
+      payload.machineId = machineId;
+      payload.machineName = machineName;
+    }
+
     const response = await apiRequest('update-task-execution', {
       method: 'PATCH',
       body: JSON.stringify(payload)
     });
 
-    return response.ok;
+    const result = await response.json().catch(() => null);
+    return response.ok && result?.success !== false;
   } catch (error) {
     logError(`Failed to update task status: ${error.message}`);
+    return false;
+  }
+}
+
+async function claimTask(displayNumber) {
+  const machineId = getMachineId();
+  const machineName = getMachineName();
+
+  if (!machineId) {
+    // No machine ID - skip atomic claiming
+    return true;
+  }
+
+  const payload = {
+    displayNumber,
+    status: 'running',
+    machineId,
+    machineName,
+    atomic: true
+  };
+
+  try {
+    const response = await apiRequest('update-task-execution', {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (result.claimed === true) {
+      log(`Task #${displayNumber} claimed by this machine (${machineName})`);
+      return true;
+    }
+
+    if (result.claimed === false) {
+      log(`Task #${displayNumber} already claimed by ${result.claimedBy || 'another machine'}`);
+      return false;
+    }
+
+    // Backward compatibility
+    return response.ok;
+  } catch (error) {
+    log(`Task #${displayNumber} claim request failed: ${error.message}`);
     return false;
   }
 }
@@ -164,168 +436,786 @@ async function updateTaskStatus(displayNumber, status, extra = {}) {
 // ==================== Project Registry ====================
 
 function getProjectPath(gitRemote) {
-  const registryFile = join(CONFIG_DIR, 'projects.json');
-
-  if (!existsSync(registryFile)) {
+  if (!existsSync(REGISTRY_FILE)) {
     return null;
   }
 
   try {
-    const data = JSON.parse(readFileSync(registryFile, 'utf8'));
+    const data = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'));
     return data.projects?.[gitRemote]?.path || null;
   } catch {
     return null;
   }
 }
 
+function getListedProjects() {
+  if (!existsSync(REGISTRY_FILE)) {
+    return {};
+  }
+
+  try {
+    const data = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'));
+    const result = {};
+    for (const [remote, info] of Object.entries(data.projects || {})) {
+      result[remote] = info.path;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+// ==================== Git Worktree Management ====================
+
+function getWorktreeSuffix() {
+  const machineId = getMachineId();
+  if (machineId) {
+    // Extract the random suffix from machine_id (last 8 chars after hyphen)
+    const parts = machineId.split('-');
+    if (parts.length > 1) {
+      return parts[parts.length - 1].slice(0, 8);
+    }
+    return machineId.slice(0, 8);
+  }
+  return 'local';
+}
+
+function getWorktreePath(displayNumber, projectPath) {
+  const suffix = getWorktreeSuffix();
+  const worktreeName = `push-${displayNumber}-${suffix}`;
+
+  if (projectPath) {
+    return join(dirname(projectPath), worktreeName);
+  }
+  return join(process.cwd(), '..', worktreeName);
+}
+
+function createWorktree(displayNumber, projectPath) {
+  const suffix = getWorktreeSuffix();
+  const branch = `push-${displayNumber}-${suffix}`;
+  const worktreePath = getWorktreePath(displayNumber, projectPath);
+
+  if (existsSync(worktreePath)) {
+    log(`Worktree already exists: ${worktreePath}`);
+    return worktreePath;
+  }
+
+  const gitCwd = projectPath || process.cwd();
+
+  try {
+    // Try to create with new branch
+    execSync(`git worktree add "${worktreePath}" -b ${branch}`, {
+      cwd: gitCwd,
+      timeout: 30000,
+      stdio: 'pipe'
+    });
+    log(`Created worktree: ${worktreePath}`);
+    return worktreePath;
+  } catch {
+    // Branch might already exist, try without -b
+    try {
+      execSync(`git worktree add "${worktreePath}" ${branch}`, {
+        cwd: gitCwd,
+        timeout: 30000,
+        stdio: 'pipe'
+      });
+      log(`Created worktree (existing branch): ${worktreePath}`);
+      return worktreePath;
+    } catch (e) {
+      logError(`Failed to create worktree: ${e.message}`);
+      return null;
+    }
+  }
+}
+
+function cleanupWorktree(displayNumber, projectPath) {
+  const worktreePath = getWorktreePath(displayNumber, projectPath);
+
+  if (!existsSync(worktreePath)) return;
+
+  const gitCwd = projectPath || process.cwd();
+  const suffix = getWorktreeSuffix();
+  const branch = `push-${displayNumber}-${suffix}`;
+
+  try {
+    execSync(`git worktree remove "${worktreePath}" --force`, {
+      cwd: gitCwd,
+      timeout: 30000,
+      stdio: 'pipe'
+    });
+    log(`Cleaned up worktree: ${worktreePath}`);
+    log(`Branch preserved for review: ${branch}`);
+  } catch (e) {
+    logError(`Failed to cleanup worktree: ${e.message}`);
+  }
+}
+
+// ==================== PR Auto-Creation ====================
+
+function createPRForTask(displayNumber, summary, projectPath) {
+  const suffix = getWorktreeSuffix();
+  const branch = `push-${displayNumber}-${suffix}`;
+  const gitCwd = projectPath || process.cwd();
+
+  try {
+    // Check if branch has commits
+    const logResult = execSync(`git log HEAD..${branch} --oneline`, {
+      cwd: gitCwd,
+      timeout: 10000,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    if (!logResult.trim()) {
+      log(`Branch ${branch} has no new commits, skipping PR creation`);
+      return null;
+    }
+
+    const commitCount = logResult.trim().split('\n').length;
+    log(`Branch ${branch} has ${commitCount} new commit(s)`);
+
+    // Push branch
+    execSync(`git push -u origin ${branch}`, {
+      cwd: gitCwd,
+      timeout: 60000,
+      stdio: 'pipe'
+    });
+    log(`Pushed branch ${branch} to origin`);
+
+    // Create PR using gh CLI
+    const prTitle = `Push Task #${displayNumber}: ${summary.slice(0, 50)}`;
+    const prBody = `## Summary
+
+Automated PR from Push daemon for task #${displayNumber}.
+
+**Task:** ${summary}
+
+---
+
+*This PR was created automatically by the Push task execution daemon.*
+*Review the changes and merge when ready.*`;
+
+    const prResult = execSync(`gh pr create --head ${branch} --title "${prTitle.replace(/"/g, '\\"')}" --body "${prBody.replace(/"/g, '\\"')}"`, {
+      cwd: gitCwd,
+      timeout: 30000,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const prUrl = prResult.trim();
+    log(`Created PR for task #${displayNumber}: ${prUrl}`);
+    return prUrl;
+  } catch (e) {
+    if (e.message?.includes('already exists')) {
+      log(`PR already exists for branch ${branch}`);
+    } else if (e.message?.includes('not found') || e.message?.includes('ENOENT')) {
+      log('GitHub CLI (gh) not installed, skipping PR creation');
+    } else {
+      logError(`Failed to create PR: ${e.message}`);
+    }
+    return null;
+  }
+}
+
+// ==================== Stuck Detection ====================
+
+function checkStuckPatterns(displayNumber, line) {
+  const lineLower = line.toLowerCase();
+
+  for (const pattern of STUCK_PATTERNS) {
+    if (lineLower.includes(pattern.toLowerCase())) {
+      return `Detected: '${pattern}'`;
+    }
+  }
+
+  return null;
+}
+
+function monitorTaskStdout(displayNumber, proc) {
+  if (!proc.stdout) return;
+
+  // Initialize tracking
+  if (!taskLastOutput.has(displayNumber)) {
+    taskLastOutput.set(displayNumber, Date.now());
+  }
+  if (!taskStdoutBuffer.has(displayNumber)) {
+    taskStdoutBuffer.set(displayNumber, []);
+  }
+
+  // Non-blocking check for available data
+  proc.stdout.once('readable', () => {
+    let chunk;
+    while ((chunk = proc.stdout.read()) !== null) {
+      const lines = chunk.toString().split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+
+        taskLastOutput.set(displayNumber, Date.now());
+
+        // Keep last 20 lines
+        const buffer = taskStdoutBuffer.get(displayNumber);
+        buffer.push(line);
+        if (buffer.length > 20) buffer.shift();
+
+        // Check for stuck patterns
+        const stuckReason = checkStuckPatterns(displayNumber, line);
+        if (stuckReason) {
+          log(`Task #${displayNumber} may be stuck: ${stuckReason}`);
+          log(`  Line: ${line.slice(0, 100)}...`);
+
+          updateTaskDetail(displayNumber, {
+            phase: 'stuck',
+            detail: `Waiting for input: ${stuckReason}`
+          });
+
+          if (NOTIFY_ON_NEEDS_INPUT) {
+            const info = taskDetails.get(displayNumber) || {};
+            sendMacNotification(
+              `Task #${displayNumber} needs input`,
+              `${info.summary?.slice(0, 40) || 'Unknown'}... ${stuckReason}`,
+              'Ping'
+            );
+          }
+        }
+      }
+    }
+  });
+}
+
+function checkTaskIdle(displayNumber) {
+  const lastOutput = taskLastOutput.get(displayNumber);
+  if (!lastOutput) return false;
+
+  const elapsed = Date.now() - lastOutput;
+
+  if (elapsed > STUCK_IDLE_THRESHOLD) {
+    log(`Task #${displayNumber} has been idle for ${Math.floor(elapsed / 1000)}s`);
+    return true;
+  }
+
+  if (elapsed > STUCK_WARNING_THRESHOLD) {
+    log(`Task #${displayNumber} idle warning: ${Math.floor(elapsed / 1000)}s since last output`);
+  }
+
+  return false;
+}
+
+// ==================== Session ID Extraction ====================
+
+function extractSessionIdFromStdout(proc, buffer) {
+  let remaining = '';
+  if (proc.stdout) {
+    try {
+      remaining = proc.stdout.read()?.toString() || '';
+    } catch {}
+  }
+
+  const allOutput = buffer.join('\n') + '\n' + remaining;
+
+  // Try to parse JSON output
+  for (const line of allOutput.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('{') && trimmed.includes('session_id')) {
+      try {
+        const data = JSON.parse(trimmed);
+        if (data.session_id) return data.session_id;
+      } catch {}
+    }
+  }
+
+  // Try parsing whole output as JSON
+  try {
+    const data = JSON.parse(allOutput.trim());
+    return data.session_id || null;
+  } catch {}
+
+  return null;
+}
+
 // ==================== Task Execution ====================
 
+function updateTaskDetail(displayNumber, updates) {
+  const current = taskDetails.get(displayNumber) || {};
+  taskDetails.set(displayNumber, { ...current, ...updates });
+  updateStatusFile();
+}
+
 function executeTask(task) {
+  // Decrypt E2EE fields
+  task = decryptTaskFields(task);
+
   const displayNumber = task.displayNumber || task.display_number;
   const gitRemote = task.gitRemote || task.git_remote;
   const summary = task.summary || 'No summary';
+  const content = task.normalizedContent || task.normalized_content ||
+    task.content || task.summary || 'Work on this task';
 
-  log(`Starting task #${displayNumber}: ${summary}`);
+  if (!displayNumber) {
+    log('Task has no display number, skipping');
+    return null;
+  }
+
+  if (runningTasks.has(displayNumber)) {
+    log(`Task #${displayNumber} already running, skipping`);
+    return null;
+  }
+
+  if (runningTasks.size >= MAX_CONCURRENT_TASKS) {
+    log(`Max concurrent tasks (${MAX_CONCURRENT_TASKS}) reached, skipping #${displayNumber}`);
+    return null;
+  }
 
   // Get project path
-  const projectPath = getProjectPath(gitRemote);
-  if (!projectPath) {
-    logError(`No project path for ${gitRemote}`);
-    updateTaskStatus(displayNumber, 'failed', {
-      error: `Project not registered: ${gitRemote}`
-    });
+  let projectPath = null;
+  if (gitRemote) {
+    projectPath = getProjectPath(gitRemote);
+    if (!projectPath) {
+      log(`Task #${displayNumber}: Project not registered: ${gitRemote}`);
+      log("Run '/push-todo connect' in the project directory to register");
+      return null;
+    }
+
+    if (!existsSync(projectPath)) {
+      logError(`Task #${displayNumber}: Project path does not exist: ${projectPath}`);
+      updateTaskStatus(displayNumber, 'failed', {
+        error: `Project path not found: ${projectPath}`
+      });
+      return null;
+    }
+
+    log(`Task #${displayNumber}: Project ${gitRemote} -> ${projectPath}`);
+  }
+
+  // Atomic task claiming
+  if (!claimTask(displayNumber)) {
     return null;
   }
 
-  if (!existsSync(projectPath)) {
-    logError(`Project path does not exist: ${projectPath}`);
-    updateTaskStatus(displayNumber, 'failed', {
-      error: `Project path not found: ${projectPath}`
+  // Track task details
+  updateTaskDetail(displayNumber, {
+    taskId: task.id || task.todo_id || '',
+    summary,
+    status: 'running',
+    phase: 'analyzing',
+    detail: 'Analyzing task certainty...',
+    startedAt: Date.now(),
+    gitRemote
+  });
+
+  log(`Analyzing task #${displayNumber}: ${content.slice(0, 60)}...`);
+
+  // Analyze certainty
+  const analysis = analyzeTaskCertainty(task);
+  const executionMode = determineExecutionMode(analysis);
+
+  log(`Task #${displayNumber} execution mode: ${executionMode}`);
+
+  // Handle low-certainty tasks
+  if (executionMode === 'clarify') {
+    log(`Task #${displayNumber} requires clarification (certainty too low)`);
+
+    const questions = analysis?.clarificationQuestions?.map(q => ({
+      question: q.question,
+      options: q.options,
+      priority: q.priority
+    })) || [];
+
+    let clarificationSummary = 'Task requires clarification before execution.';
+    if (analysis) {
+      clarificationSummary += ` Certainty score: ${analysis.score}`;
+      if (analysis.reasons?.length > 0) {
+        clarificationSummary += ` (${analysis.reasons[0].explanation})`;
+      }
+    }
+
+    updateTaskStatus(displayNumber, 'needs_clarification', {
+      summary: clarificationSummary,
+      certaintyScore: analysis?.score,
+      clarificationQuestions: questions
     });
+
+    if (NOTIFY_ON_NEEDS_INPUT) {
+      sendMacNotification(
+        `Task #${displayNumber} needs clarification`,
+        `${summary.slice(0, 50)}... Low certainty - please clarify.`,
+        'Ping'
+      );
+    }
+
+    taskDetails.delete(displayNumber);
+    updateStatusFile();
     return null;
   }
 
-  // Build prompt for Claude
-  const content = task.normalizedContent || task.content || task.summary || '';
-  const transcript = task.originalTranscript || task.transcript || '';
-
-  let prompt = `Task #${displayNumber}: ${summary}\n\n`;
-  if (content) {
-    prompt += `${content}\n\n`;
+  // Create worktree
+  const worktreePath = createWorktree(displayNumber, projectPath);
+  if (!worktreePath) {
+    updateTaskStatus(displayNumber, 'failed', { error: 'Failed to create git worktree' });
+    taskDetails.delete(displayNumber);
+    return null;
   }
-  if (transcript && transcript !== content) {
-    prompt += `Original voice note: "${transcript}"\n`;
+
+  taskProjectPaths.set(displayNumber, projectPath);
+
+  // Build prompt
+  let prompt;
+  if (executionMode === 'planning') {
+    const reasonsText = analysis?.reasons?.slice(0, 3).map(r => `- ${r.explanation}`).join('\n') || '';
+    prompt = `Work on Push task #${displayNumber}:
+
+${content}
+
+IMPORTANT: This task has medium certainty (score: ${analysis?.score ?? 'N/A'}).
+Please START BY ENTERING PLAN MODE to clarify the approach before implementing.
+
+Reasons for lower certainty:
+${reasonsText}
+
+After your plan is approved, implement the changes.
+
+When you're done, the SessionEnd hook will automatically report completion to Supabase.
+
+If you need to understand the codebase, start by reading the CLAUDE.md file if it exists.`;
+  } else {
+    prompt = `Work on Push task #${displayNumber}:
+
+${content}
+
+IMPORTANT: When you're done, the SessionEnd hook will automatically report completion to Supabase.
+
+If you need to understand the codebase, start by reading the CLAUDE.md file if it exists.`;
   }
 
   // Update status to running
-  updateTaskStatus(displayNumber, 'running');
-
-  // Spawn Claude process
-  const claudeArgs = ['--print', '--dangerously-skip-permissions', '-p', prompt];
-
-  const child = spawn('claude', claudeArgs, {
-    cwd: projectPath,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      PUSH_TASK_ID: task.id,
-      PUSH_DISPLAY_NUMBER: String(displayNumber)
-    }
+  updateTaskStatus(displayNumber, 'running', {
+    certaintyScore: analysis?.score
   });
 
-  const taskInfo = {
-    process: child,
-    task,
-    displayNumber,
-    startTime: Date.now(),
-    stdout: '',
-    stderr: ''
-  };
+  // Build Claude command
+  const allowedTools = [
+    'Read', 'Edit', 'Write', 'Glob', 'Grep',
+    'Bash(git *)',
+    'Bash(npm *)', 'Bash(npx *)', 'Bash(yarn *)',
+    'Bash(python *)', 'Bash(python3 *)', 'Bash(pip *)', 'Bash(pip3 *)',
+    'Task'
+  ].join(',');
 
-  // Capture output
-  child.stdout.on('data', (data) => {
-    taskInfo.stdout += data.toString();
-  });
+  const claudeArgs = [
+    '-p', prompt,
+    '--allowedTools', allowedTools,
+    '--output-format', 'json'
+  ];
 
-  child.stderr.on('data', (data) => {
-    taskInfo.stderr += data.toString();
-  });
+  if (executionMode === 'planning') {
+    claudeArgs.unshift('--plan');
+  }
 
-  // Handle completion
-  child.on('close', (code) => {
-    runningTasks.delete(displayNumber);
-
-    const duration = Math.floor((Date.now() - taskInfo.startTime) / 1000);
-    log(`Task #${displayNumber} completed with code ${code} (${duration}s)`);
-
-    if (code === 0) {
-      updateTaskStatus(displayNumber, 'completed', {
-        duration,
-        output: taskInfo.stdout.slice(-1000) // Last 1000 chars
-      });
-
-      completedToday.push({
-        displayNumber,
-        summary,
-        completedAt: new Date().toISOString(),
-        duration
-      });
-    } else {
-      updateTaskStatus(displayNumber, 'failed', {
-        error: `Exit code ${code}`,
-        stderr: taskInfo.stderr.slice(-500)
-      });
-    }
-
-    updateStatusFile();
-  });
-
-  child.on('error', (error) => {
-    runningTasks.delete(displayNumber);
-    logError(`Task #${displayNumber} error: ${error.message}`);
-
-    updateTaskStatus(displayNumber, 'failed', {
-      error: error.message
+  try {
+    const child = spawn('claude', claudeArgs, {
+      cwd: worktreePath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PUSH_TASK_ID: task.id,
+        PUSH_DISPLAY_NUMBER: String(displayNumber)
+      }
     });
 
-    updateStatusFile();
-  });
+    const taskInfo = {
+      process: child,
+      task,
+      displayNumber,
+      startTime: Date.now(),
+      projectPath,
+      executionMode
+    };
 
-  runningTasks.set(displayNumber, taskInfo);
-  return taskInfo;
+    runningTasks.set(displayNumber, taskInfo);
+    taskLastOutput.set(displayNumber, Date.now());
+    taskStdoutBuffer.set(displayNumber, []);
+
+    // Monitor stdout
+    child.stdout.on('data', (data) => {
+      const lines = data.toString().split('\n');
+      for (const line of lines) {
+        if (line.trim()) {
+          taskLastOutput.set(displayNumber, Date.now());
+          const buffer = taskStdoutBuffer.get(displayNumber) || [];
+          buffer.push(line);
+          if (buffer.length > 20) buffer.shift();
+          taskStdoutBuffer.set(displayNumber, buffer);
+
+          const stuckReason = checkStuckPatterns(displayNumber, line);
+          if (stuckReason) {
+            log(`Task #${displayNumber} may be stuck: ${stuckReason}`);
+            updateTaskDetail(displayNumber, {
+              phase: 'stuck',
+              detail: `Waiting for input: ${stuckReason}`
+            });
+          }
+        }
+      }
+    });
+
+    // Handle completion
+    child.on('close', (code) => {
+      handleTaskCompletion(displayNumber, code);
+    });
+
+    child.on('error', (error) => {
+      logError(`Task #${displayNumber} error: ${error.message}`);
+      runningTasks.delete(displayNumber);
+      updateTaskStatus(displayNumber, 'failed', { error: error.message });
+      taskDetails.delete(displayNumber);
+      updateStatusFile();
+    });
+
+    const modeDesc = executionMode === 'planning' ? 'planning mode' : 'standard mode';
+    updateTaskDetail(displayNumber, {
+      phase: 'executing',
+      detail: `Running Claude in ${modeDesc}...`,
+      claudePid: child.pid
+    });
+
+    log(`Started Claude for task #${displayNumber} in ${modeDesc} (PID: ${child.pid})`);
+
+    if (executionMode === 'planning') {
+      sendMacNotification(
+        `Task #${displayNumber} started (planning)`,
+        `${summary.slice(0, 60)}...`,
+        'default'
+      );
+    }
+
+    return taskInfo;
+  } catch (error) {
+    logError(`Error starting Claude for task #${displayNumber}: ${error.message}`);
+    updateTaskStatus(displayNumber, 'failed', { error: error.message });
+    taskDetails.delete(displayNumber);
+    return null;
+  }
+}
+
+function handleTaskCompletion(displayNumber, exitCode) {
+  const taskInfo = runningTasks.get(displayNumber);
+  if (!taskInfo) return;
+
+  runningTasks.delete(displayNumber);
+
+  const duration = Math.floor((Date.now() - taskInfo.startTime) / 1000);
+  const info = taskDetails.get(displayNumber) || {};
+  const summary = info.summary || 'Unknown task';
+  const projectPath = taskProjectPaths.get(displayNumber);
+
+  log(`Task #${displayNumber} completed with code ${exitCode} (${duration}s)`);
+
+  if (exitCode === 0) {
+    // Extract session ID
+    const buffer = taskStdoutBuffer.get(displayNumber) || [];
+    const sessionId = extractSessionIdFromStdout(taskInfo.process, buffer);
+
+    if (sessionId) {
+      log(`Task #${displayNumber} session_id: ${sessionId}`);
+    } else {
+      log(`Task #${displayNumber} could not extract session_id`);
+    }
+
+    updateTaskStatus(displayNumber, 'completed', {
+      duration,
+      sessionId
+    });
+
+    // Auto-create PR
+    const prUrl = createPRForTask(displayNumber, summary, projectPath);
+
+    if (NOTIFY_ON_COMPLETE) {
+      const prNote = prUrl ? ' PR ready for review.' : '';
+      sendMacNotification(
+        `Task #${displayNumber} complete`,
+        `${summary.slice(0, 50)}...${prNote}`,
+        'Glass'
+      );
+    }
+
+    completedToday.push({
+      displayNumber,
+      summary,
+      completedAt: new Date().toISOString(),
+      duration,
+      status: 'completed',
+      prUrl,
+      sessionId
+    });
+  } else {
+    const stderr = taskInfo.process.stderr?.read()?.toString() || '';
+    const errorMsg = `Exit code ${exitCode}: ${stderr.slice(0, 200)}`;
+    updateTaskStatus(displayNumber, 'failed', { error: errorMsg });
+
+    if (NOTIFY_ON_FAILURE) {
+      sendMacNotification(
+        `Task #${displayNumber} failed`,
+        `${summary.slice(0, 40)}... Exit code ${exitCode}`,
+        'Basso'
+      );
+    }
+
+    completedToday.push({
+      displayNumber,
+      summary,
+      completedAt: new Date().toISOString(),
+      duration,
+      status: 'failed'
+    });
+  }
+
+  // Cleanup
+  taskDetails.delete(displayNumber);
+  taskLastOutput.delete(displayNumber);
+  taskStdoutBuffer.delete(displayNumber);
+  taskProjectPaths.delete(displayNumber);
+
+  cleanupWorktree(displayNumber, projectPath);
+  updateStatusFile();
 }
 
 // ==================== Status File ====================
 
 function updateStatusFile() {
-  const status = {
-    running: true,
-    pid: process.pid,
-    startedAt,
-    version: getVersion(),
-    runningTasks: Array.from(runningTasks.values()).map(t => ({
-      displayNumber: t.displayNumber,
-      summary: t.task.summary || 'No summary',
+  const now = new Date();
+
+  const activeTasks = [];
+
+  // Running tasks
+  for (const [displayNum, taskInfo] of runningTasks) {
+    const info = taskDetails.get(displayNum) || {};
+    const elapsed = Math.floor((Date.now() - taskInfo.startTime) / 1000);
+
+    activeTasks.push({
+      displayNumber: displayNum,
+      taskId: info.taskId || '',
+      summary: info.summary || 'Unknown task',
       status: 'running',
-      startTime: new Date(t.startTime).toISOString()
-    })),
-    queuedTasks: [],
-    completedToday: completedToday.slice(-20), // Last 20
-    updatedAt: new Date().toISOString()
+      phase: info.phase || 'executing',
+      detail: info.detail || 'Running Claude...',
+      startedAt: new Date(taskInfo.startTime).toISOString(),
+      elapsedSeconds: elapsed
+    });
+  }
+
+  // Queued tasks
+  for (const [displayNum, info] of taskDetails) {
+    if (!runningTasks.has(displayNum) && info.status === 'queued') {
+      activeTasks.push({
+        displayNumber: displayNum,
+        taskId: info.taskId || '',
+        summary: info.summary || 'Unknown task',
+        status: 'queued',
+        queuedAt: info.queuedAt
+      });
+    }
+  }
+
+  // Sort: running first, then queued
+  activeTasks.sort((a, b) => {
+    if (a.status === 'running' && b.status !== 'running') return -1;
+    if (a.status !== 'running' && b.status === 'running') return 1;
+    return a.displayNumber - b.displayNumber;
+  });
+
+  const status = {
+    daemon: {
+      pid: process.pid,
+      version: getVersion(),
+      startedAt: daemonStartTime,
+      machineName: getMachineName(),
+      machineId: getMachineId()?.slice(-8)
+    },
+    running: true,
+    activeTasks,
+    runningTasks: activeTasks.filter(t => t.status === 'running'),
+    queuedTasks: activeTasks.filter(t => t.status === 'queued'),
+    completedToday: completedToday.slice(-10),
+    stats: {
+      running: runningTasks.size,
+      maxConcurrent: MAX_CONCURRENT_TASKS,
+      completedToday: completedToday.length
+    },
+    updatedAt: now.toISOString()
   };
 
   try {
-    writeFileSync(STATUS_FILE, JSON.stringify(status, null, 2));
+    const tempFile = `${STATUS_FILE}.tmp`;
+    writeFileSync(tempFile, JSON.stringify(status, null, 2));
+    renameSync(tempFile, STATUS_FILE);
   } catch {}
 }
 
-function getVersion() {
-  try {
-    const pkgPath = join(__dirname, '..', 'package.json');
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-    return pkg.version || '3.0.0';
-  } catch {
-    return '3.0.0';
+// ==================== Task Checking ====================
+
+async function checkTimeouts() {
+  const now = Date.now();
+  const timedOut = [];
+
+  for (const [displayNumber, taskInfo] of runningTasks) {
+    const elapsed = now - taskInfo.startTime;
+
+    if (elapsed > TASK_TIMEOUT_MS) {
+      log(`Task #${displayNumber} TIMEOUT after ${Math.floor(elapsed / 1000)}s`);
+      timedOut.push(displayNumber);
+    }
+
+    // Also check idle
+    checkTaskIdle(displayNumber);
+  }
+
+  // Handle timeouts
+  for (const displayNumber of timedOut) {
+    const taskInfo = runningTasks.get(displayNumber);
+    if (!taskInfo) continue;
+
+    const info = taskDetails.get(displayNumber) || {};
+    const duration = Math.floor((now - taskInfo.startTime) / 1000);
+
+    // Terminate
+    log(`Terminating stuck task #${displayNumber} (PID: ${taskInfo.process.pid})`);
+    try {
+      taskInfo.process.kill('SIGTERM');
+      await new Promise(r => setTimeout(r, 5000));
+      taskInfo.process.kill('SIGKILL');
+    } catch {}
+
+    runningTasks.delete(displayNumber);
+
+    const timeoutError = `Task timed out after ${duration}s (limit: ${TASK_TIMEOUT_MS / 1000}s)`;
+    updateTaskStatus(displayNumber, 'failed', { error: timeoutError });
+
+    if (NOTIFY_ON_FAILURE) {
+      sendMacNotification(
+        `Task #${displayNumber} timed out`,
+        `${info.summary?.slice(0, 40) || 'Unknown'}... (${duration}s limit reached)`,
+        'Basso'
+      );
+    }
+
+    completedToday.push({
+      displayNumber,
+      summary: info.summary || 'Unknown task',
+      completedAt: new Date().toISOString(),
+      duration,
+      status: 'timeout'
+    });
+
+    // Cleanup
+    const projectPath = taskProjectPaths.get(displayNumber);
+    taskDetails.delete(displayNumber);
+    taskLastOutput.delete(displayNumber);
+    taskStdoutBuffer.delete(displayNumber);
+    taskProjectPaths.delete(displayNumber);
+    cleanupWorktree(displayNumber, projectPath);
+  }
+
+  if (timedOut.length > 0) {
+    updateStatusFile();
   }
 }
 
@@ -344,6 +1234,9 @@ async function pollAndExecute() {
   const tasks = await fetchQueuedTasks();
 
   if (tasks.length === 0) {
+    if (runningTasks.size > 0) {
+      log(`No new tasks. ${runningTasks.size} task(s) running.`);
+    }
     return;
   }
 
@@ -353,7 +1246,6 @@ async function pollAndExecute() {
   for (const task of tasks.slice(0, availableSlots)) {
     const displayNumber = task.displayNumber || task.display_number;
 
-    // Skip if already running
     if (runningTasks.has(displayNumber)) {
       continue;
     }
@@ -364,32 +1256,38 @@ async function pollAndExecute() {
   updateStatusFile();
 }
 
-async function checkTimeouts() {
-  const now = Date.now();
-
-  for (const [displayNumber, taskInfo] of runningTasks) {
-    const elapsed = now - taskInfo.startTime;
-
-    if (elapsed > TASK_TIMEOUT_MS) {
-      log(`Task #${displayNumber} timed out after ${Math.floor(elapsed / 1000)}s`);
-
-      try {
-        taskInfo.process.kill('SIGTERM');
-      } catch {}
-
-      runningTasks.delete(displayNumber);
-
-      updateTaskStatus(displayNumber, 'failed', {
-        error: 'Task timed out'
-      });
-    }
-  }
-}
-
 async function mainLoop() {
-  log('Daemon starting...');
+  daemonStartTime = new Date().toISOString();
 
-  startedAt = new Date().toISOString();
+  log('=' .repeat(60));
+  log('Push task execution daemon started');
+  log(`Machine: ${getMachineName()} (${getMachineId() || 'no ID'})`);
+  log(`PID: ${process.pid}`);
+  log(`Polling interval: ${POLL_INTERVAL / 1000}s`);
+  log(`Max concurrent tasks: ${MAX_CONCURRENT_TASKS}`);
+  log(`E2EE: ${e2eeAvailable ? 'Available' : 'Not available'}`);
+  log(`Certainty analysis: ${CertaintyAnalyzer ? 'Available' : 'Not available'}`);
+  log(`Log file: ${LOG_FILE}`);
+
+  // Show registered projects
+  const projects = getListedProjects();
+  const projectCount = Object.keys(projects).length;
+  if (projectCount > 0) {
+    log(`Registered projects (${projectCount}):`);
+    for (const [remote, path] of Object.entries(projects)) {
+      log(`  - ${remote}`);
+      log(`    -> ${path}`);
+    }
+  } else {
+    log('No projects registered yet');
+    log("Run '/push-todo connect' in your project directories");
+  }
+  log('=' .repeat(60));
+
+  // Check API key
+  if (!getApiKey()) {
+    log("WARNING: No API key configured. Run '/push-todo connect' first.");
+  }
 
   // Write version file
   try {
@@ -402,8 +1300,8 @@ async function mainLoop() {
   // Main poll loop
   const poll = async () => {
     try {
-      await pollAndExecute();
       await checkTimeouts();
+      await pollAndExecute();
     } catch (error) {
       logError(`Poll error: ${error.message}`);
     }
@@ -456,6 +1354,10 @@ process.on('uncaughtException', (error) => {
 
 // Ensure directories exist
 mkdirSync(PUSH_DIR, { recursive: true });
+mkdirSync(CONFIG_DIR, { recursive: true });
+
+// Rotate logs
+rotateLogs();
 
 // Write PID file
 writeFileSync(PID_FILE, String(process.pid));

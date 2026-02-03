@@ -29,7 +29,7 @@ function getApiKey() {
 
   try {
     const content = readFileSync(CONFIG_FILE, 'utf8');
-    const match = content.match(/^export\s+PUSH_KEY\s*=\s*["']?([^"'\n]+)["']?/m);
+    const match = content.match(/^export\s+PUSH_API_KEY\s*=\s*["']?([^"'\n]+)["']?/m);
     return match ? match[1] : null;
   } catch {
     return null;

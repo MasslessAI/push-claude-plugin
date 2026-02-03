@@ -147,3 +147,46 @@ export function hasUncommittedChanges() {
     return false;
   }
 }
+
+/**
+ * Normalize a git remote URL to a consistent format.
+ *
+ * Converts various URL formats to: host/owner/repo
+ * - git@github.com:user/repo.git → github.com/user/repo
+ * - https://github.com/user/repo.git → github.com/user/repo
+ * - ssh://git@github.com/user/repo → github.com/user/repo
+ *
+ * @param {string} url - The git remote URL to normalize
+ * @returns {string} Normalized URL
+ */
+export function normalizeGitRemote(url) {
+  if (!url) return url;
+
+  let normalized = url.trim();
+
+  // Remove protocol prefixes
+  const prefixes = ['https://', 'http://', 'git@', 'ssh://git@', 'ssh://'];
+  for (const prefix of prefixes) {
+    if (normalized.startsWith(prefix)) {
+      normalized = normalized.slice(prefix.length);
+      break;
+    }
+  }
+
+  // Convert : to / (for git@ style URLs like git@github.com:user/repo)
+  if (normalized.includes(':') && !normalized.includes('://')) {
+    normalized = normalized.replace(':', '/');
+  }
+
+  // Remove .git suffix
+  if (normalized.endsWith('.git')) {
+    normalized = normalized.slice(0, -4);
+  }
+
+  // Remove trailing slash
+  if (normalized.endsWith('/')) {
+    normalized = normalized.slice(0, -1);
+  }
+
+  return normalized;
+}
