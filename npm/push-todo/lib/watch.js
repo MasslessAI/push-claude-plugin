@@ -265,6 +265,7 @@ function outputPlainText() {
  *
  * @param {Object} options - Watch options
  * @param {boolean} options.json - Output JSON instead of TUI
+ * @param {boolean} options.follow - Exit when all tasks complete
  */
 export function startWatch(options = {}) {
   // JSON mode
@@ -281,6 +282,7 @@ export function startWatch(options = {}) {
 
   // Live TUI mode
   let running = true;
+  const followMode = options.follow || options.f;
 
   // Hide cursor
   process.stdout.write(codes.hideCursor);
@@ -290,6 +292,15 @@ export function startWatch(options = {}) {
     const status = readStatus();
     const output = formatUI(status);
     process.stdout.write(codes.clearScreen + codes.cursorHome + output);
+
+    // In follow mode, exit when no running or queued tasks
+    if (followMode && status) {
+      const runningTasks = status.runningTasks || [];
+      const queuedTasks = status.queuedTasks || [];
+      if (runningTasks.length === 0 && queuedTasks.length === 0) {
+        cleanup('All tasks completed.');
+      }
+    }
   }
 
   // Initial render
@@ -310,7 +321,7 @@ export function startWatch(options = {}) {
   }
 
   // Cleanup function
-  function cleanup() {
+  function cleanup(message = 'Watch mode ended.') {
     running = false;
     clearInterval(interval);
 
@@ -319,7 +330,7 @@ export function startWatch(options = {}) {
 
     // Clear screen and show exit message
     process.stdout.write(codes.clearScreen + codes.cursorHome);
-    console.log('Watch mode ended.');
+    console.log(message);
 
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(false);

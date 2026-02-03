@@ -40,6 +40,7 @@ ${bold('OPTIONS:')}
   --search <query>                 Search tasks
   --status                         Show connection and daemon status
   --watch, -w                      Live terminal UI
+  --follow, -f                     With --watch: exit when all tasks complete
   --setting [name]                 Show or toggle settings
   --resume <number>                Resume Claude session for a completed task
   --view-screenshot <idx>          Open screenshot for viewing (index or filename)
@@ -82,6 +83,7 @@ const options = {
   'search': { type: 'string' },
   'status': { type: 'boolean' },
   'watch': { type: 'boolean', short: 'w' },
+  'follow': { type: 'boolean', short: 'f' },
   'setting': { type: 'string' },
   'resume': { type: 'string' },
   'view-screenshot': { type: 'string' },
