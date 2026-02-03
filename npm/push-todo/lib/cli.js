@@ -15,7 +15,7 @@ import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '.
 import { getScreenshotPath, screenshotExists, openScreenshot } from './utils/screenshots.js';
 import { bold, red, cyan, dim, green } from './utils/colors.js';
 
-const VERSION = '3.0.9';
+const VERSION = '3.1.0';
 
 const HELP_TEXT = `
 ${bold('push-todo')} - Voice tasks from Push iOS app for Claude Code

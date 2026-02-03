@@ -2,16 +2,67 @@
 /**
  * Session start hook for Push CLI.
  *
- * Displays task count notification when Claude Code starts.
+ * 1. Ensures CLI is installed (for marketplace installations)
+ * 2. Displays task count notification when Claude Code starts
  */
 
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
 const CONFIG_FILE = join(homedir(), '.config', 'push', 'config');
 const API_BASE = 'https://jxuzqcbqhiaxmfitzxlo.supabase.co/functions/v1';
+const NPM_PACKAGE = '@masslessai/push-todo';
+
+/**
+ * Check if push-todo CLI is available.
+ */
+function isCLIInstalled() {
+  try {
+    execSync('which push-todo', {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Install the CLI via npm (for marketplace installations).
+ */
+function ensureCLIInstalled() {
+  if (isCLIInstalled()) {
+    return true;
+  }
+
+  console.log(`[Push] Installing CLI tools...`);
+
+  try {
+    // Use spawnSync to allow npm to find itself
+    const result = spawnSync('npm', ['install', '-g', NPM_PACKAGE], {
+      encoding: 'utf8',
+      timeout: 60000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true
+    });
+
+    if (result.status === 0) {
+      console.log(`[Push] CLI installed successfully.`);
+      return true;
+    } else {
+      console.log(`[Push] CLI installation failed. Run manually: npm install -g ${NPM_PACKAGE}`);
+      return false;
+    }
+  } catch (error) {
+    console.log(`[Push] CLI installation failed: ${error.message}`);
+    console.log(`[Push] Run manually: npm install -g ${NPM_PACKAGE}`);
+    return false;
+  }
+}
 
 /**
  * Get the API key from config.
@@ -108,10 +159,16 @@ async function fetchTaskCount(apiKey, gitRemote) {
  * Main entry point.
  */
 async function main() {
+  // Step 1: Ensure CLI is installed (for marketplace installations)
+  // This is a no-op if CLI already exists (npm install path)
+  ensureCLIInstalled();
+
+  // Step 2: Check for API key
   const apiKey = getApiKey();
 
   if (!apiKey) {
-    // No API key - silent exit
+    // No API key - prompt to connect
+    console.log(`[Push] Run 'push-todo connect' to set up your account.`);
     process.exit(0);
   }
 
