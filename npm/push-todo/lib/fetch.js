@@ -149,6 +149,20 @@ export async function showTask(displayNumber, options = {}) {
 }
 
 /**
+ * Get a task by display number (for programmatic use).
+ *
+ * @param {number} displayNumber - The task's display number
+ * @returns {Promise<Object|null>} The task object or null if not found
+ */
+export async function getTaskByNumber(displayNumber) {
+  const task = await api.fetchTaskByNumber(displayNumber);
+  if (!task) {
+    return null;
+  }
+  return decryptTaskFields(task);
+}
+
+/**
  * Mark a task as completed.
  *
  * @param {string} taskId - UUID of the task

@@ -5,10 +5,11 @@
  */
 
 import { parseArgs } from 'util';
+import { spawn } from 'child_process';
 import * as fetch from './fetch.js';
 import { runConnect } from './connect.js';
 import { startWatch } from './watch.js';
-import { showSettings, toggleSetting } from './config.js';
+import { showSettings, toggleSetting, setMaxBatchSize } from './config.js';
 import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon-health.js';
 import { bold, red, cyan, dim } from './utils/colors.js';
 
@@ -38,9 +39,12 @@ ${bold('OPTIONS:')}
   --status                         Show connection and daemon status
   --watch, -w                      Live terminal UI
   --setting [name]                 Show or toggle settings
+  --resume <number>                Resume Claude session for a completed task
+  --set-batch-size <N>             Set max tasks for batch queue (1-20)
   --daemon-status                  Show daemon status
   --daemon-start                   Start daemon manually
   --daemon-stop                    Stop daemon
+  --commands                       Show available user commands
   --json                           Output as JSON
   --version, -v                    Show version
   --help, -h                       Show this help
@@ -74,9 +78,12 @@ const options = {
   'status': { type: 'boolean' },
   'watch': { type: 'boolean', short: 'w' },
   'setting': { type: 'string' },
+  'resume': { type: 'string' },
+  'set-batch-size': { type: 'string' },
   'daemon-status': { type: 'boolean' },
   'daemon-start': { type: 'boolean' },
   'daemon-stop': { type: 'boolean' },
+  'commands': { type: 'boolean' },
   'json': { type: 'boolean' },
   'version': { type: 'boolean', short: 'v' },
   'help': { type: 'boolean', short: 'h' }
@@ -173,6 +180,106 @@ export async function run(argv) {
         process.exit(1);
       }
     }
+    return;
+  }
+
+  // Handle --commands (simple user help)
+  if (values.commands) {
+    console.log(`
+  ${bold('Push Voice Tasks - Commands')}
+  ${'='.repeat(40)}
+
+  /push-todo              Show your active tasks
+  /push-todo 427          Work on task #427
+  /push-todo search X     Search tasks for 'X'
+  /push-todo connect      Setup or fix problems
+  /push-todo review       Check completed work
+  /push-todo status       Show connection status
+  /push-todo watch        Live monitor daemon tasks
+  /push-todo setting      View/toggle settings
+
+  ${dim('Options:')}
+  --all-projects          See tasks from all projects
+  --backlog               See deferred tasks only
+  --search "query"        Search active & completed tasks
+`);
+    return;
+  }
+
+  // Handle --set-batch-size
+  if (values['set-batch-size']) {
+    const size = parseInt(values['set-batch-size'], 10);
+    if (isNaN(size) || size < 1 || size > 20) {
+      console.error(red('Batch size must be between 1 and 20'));
+      process.exit(1);
+    }
+    if (setMaxBatchSize(size)) {
+      console.log(`Max batch size set to ${size}`);
+    } else {
+      console.error(red('Failed to set batch size'));
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Handle --resume (resume Claude session for a completed task)
+  if (values.resume) {
+    const taskNum = values.resume.replace(/^#/, '');
+    const displayNumber = parseInt(taskNum, 10);
+    if (isNaN(displayNumber)) {
+      console.error(red(`Invalid task number: ${values.resume}`));
+      process.exit(1);
+    }
+
+    // Fetch task to get session_id
+    const task = await fetch.getTaskByNumber(displayNumber);
+    if (!task) {
+      console.error(red(`Task #${displayNumber} not found`));
+      process.exit(1);
+    }
+
+    const sessionId = task.execution_session_id || task.executionSessionId;
+    if (!sessionId) {
+      const executionStatus = task.execution_status || task.executionStatus;
+      if (executionStatus) {
+        console.log(`Task #${displayNumber} has execution status '${executionStatus}' but no session ID.`);
+        console.log('Session ID is captured when daemon completes a task.');
+        console.log();
+        console.log('Possible reasons:');
+        console.log('  - Task was completed before session capture was added');
+        console.log('  - Task was completed manually (not by daemon)');
+        console.log("  - Daemon couldn't extract session ID from Claude's output");
+      } else {
+        console.log(`Task #${displayNumber} was not executed by the daemon.`);
+        console.log('Session resume is only available for tasks completed by the Push daemon.');
+      }
+      process.exit(1);
+    }
+
+    // Launch claude --resume with the session ID
+    console.log(`Resuming session for task #${displayNumber}...`);
+    console.log(`Session ID: ${sessionId}`);
+    console.log();
+
+    // Use spawn with stdio: 'inherit' to give control to Claude
+    const child = spawn('claude', ['--resume', sessionId], {
+      stdio: 'inherit',
+      shell: true
+    });
+
+    child.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        console.error(red("Error: 'claude' command not found. Is Claude Code installed?"));
+      } else {
+        console.error(red(`Error launching Claude: ${error.message}`));
+      }
+      process.exit(1);
+    });
+
+    child.on('close', (code) => {
+      process.exit(code || 0);
+    });
+
     return;
   }
 
