@@ -44,10 +44,11 @@ const BINARY_NAME = 'push-keychain-helper';
 const BINARY_DIR = join(__dirname, '../bin');
 const BINARY_PATH = join(BINARY_DIR, BINARY_NAME);
 
-// GitHub release URL pattern
-const RELEASE_VERSION = '3.0.0';
-const BINARY_URL = `https://github.com/MasslessAI/push-todo-cli/releases/download/v${RELEASE_VERSION}/${BINARY_NAME}-darwin-arm64`;
-const BINARY_URL_X64 = `https://github.com/MasslessAI/push-todo-cli/releases/download/v${RELEASE_VERSION}/${BINARY_NAME}-darwin-x64`;
+// Read version from package.json - binaries are released alongside npm package
+const PACKAGE_JSON = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+const VERSION = PACKAGE_JSON.version;
+const BINARY_URL = `https://github.com/MasslessAI/push-todo-cli/releases/download/v${VERSION}/${BINARY_NAME}-darwin-arm64`;
+const BINARY_URL_X64 = `https://github.com/MasslessAI/push-todo-cli/releases/download/v${VERSION}/${BINARY_NAME}-darwin-x64`;
 
 /**
  * Set up Claude Code plugin by creating symlink.
