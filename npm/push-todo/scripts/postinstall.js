@@ -31,6 +31,8 @@ const LEGACY_SKILL_LINK = join(LEGACY_SKILL_DIR, 'push-todo');
 
 // OpenAI Codex locations
 const CODEX_DIR = join(homedir(), '.codex');
+const CODEX_SKILL_DIR = join(CODEX_DIR, 'skills', 'push-todo');
+const CODEX_SKILL_FILE = join(CODEX_SKILL_DIR, 'SKILL.md');
 const CODEX_AGENTS_FILE = join(CODEX_DIR, 'AGENTS.md');
 
 // Clawdbot locations
@@ -142,7 +144,7 @@ function migrateFromPython() {
 
 /**
  * Set up OpenAI Codex integration.
- * Adds Push Tasks section to ~/.codex/AGENTS.md
+ * Creates ~/.codex/skills/push-todo/SKILL.md and updates AGENTS.md
  *
  * @returns {boolean} True if Codex was detected and set up
  */
@@ -154,12 +156,22 @@ function setupCodex() {
 
   console.log('[push-todo] Detected OpenAI Codex installation');
 
-  const PUSH_SECTION = `
-## Push Tasks Integration
+  // Skill file content
+  const SKILL_CONTENT = `# Push Tasks Skill
 
-Voice tasks captured on iPhone via the Push app.
+This skill retrieves and processes tasks sent from the Push iOS app.
 
-### Commands
+## Activation
+
+This skill activates when the user:
+- Says "push-todo", "push todo", "push tasks", or "tasks from push"
+- Runs \`$push-todo\` command
+- Mentions "tasks from iPhone" or "mobile tasks"
+- Asks about "pending tasks" or "voice tasks"
+
+## Commands
+
+Run these in the terminal:
 
 | Command | Description |
 |---------|-------------|
@@ -167,32 +179,76 @@ Voice tasks captured on iPhone via the Push app.
 | \`push-todo 427\` | Show task #427 |
 | \`push-todo connect\` | Connect/fix issues |
 | \`push-todo search "query"\` | Search tasks |
+| \`push-todo --help\` | All options |
 
-### Session Start
+## Instructions
 
-At the start of each session, check for pending tasks:
-\`\`\`bash
-push-todo --json 2>/dev/null | head -1
-\`\`\`
-If tasks exist, inform: "You have X task(s) from Push. Type $push-todo to see them."
+When this skill is activated:
+
+1. **Check connection** - If user hasn't set up, run:
+   \`\`\`bash
+   push-todo connect
+   \`\`\`
+
+2. **Fetch tasks** - List available tasks:
+   \`\`\`bash
+   push-todo
+   \`\`\`
+
+3. **Work on specific task** - Get task details:
+   \`\`\`bash
+   push-todo 427
+   \`\`\`
+
+4. **Present the task** to the user with a brief summary and offer to help implement it.
+`;
+
+  // AGENTS.md bootstrap content
+  const AGENTS_SECTION = `
+## Push Tasks Integration
+
+At the start of each session, check for pending tasks from the Push iOS app:
+
+1. Run this command silently:
+   \`\`\`bash
+   push-todo --json 2>/dev/null | head -1
+   \`\`\`
+
+2. If tasks exist, inform the user:
+   "You have X task(s) from Push. Type $push-todo to see them."
+
+3. If no output or error, proceed normally without mentioning Push.
 `;
 
   try {
+    // Create skill directory and SKILL.md
+    mkdirSync(CODEX_SKILL_DIR, { recursive: true });
+    writeFileSync(CODEX_SKILL_FILE, SKILL_CONTENT);
+    console.log('[push-todo] Codex: Created skills/push-todo/SKILL.md');
+
+    // Update AGENTS.md for session-start bootstrap
     if (existsSync(CODEX_AGENTS_FILE)) {
       const content = readFileSync(CODEX_AGENTS_FILE, 'utf8');
       if (content.includes('Push Tasks Integration')) {
-        console.log('[push-todo] Codex: Push section already exists in AGENTS.md');
-        return true;
+        // Update existing section (replace old Python references)
+        const updated = content.replace(
+          /## Push Tasks Integration[\s\S]*?(?=\n## |$)/,
+          AGENTS_SECTION.trim() + '\n\n'
+        );
+        writeFileSync(CODEX_AGENTS_FILE, updated);
+        console.log('[push-todo] Codex: Updated AGENTS.md');
+      } else {
+        appendFileSync(CODEX_AGENTS_FILE, AGENTS_SECTION);
+        console.log('[push-todo] Codex: Added to AGENTS.md');
       }
-      appendFileSync(CODEX_AGENTS_FILE, PUSH_SECTION);
-      console.log('[push-todo] Codex: Added Push section to AGENTS.md');
     } else {
-      writeFileSync(CODEX_AGENTS_FILE, PUSH_SECTION.trim() + '\n');
-      console.log('[push-todo] Codex: Created AGENTS.md with Push section');
+      writeFileSync(CODEX_AGENTS_FILE, AGENTS_SECTION.trim() + '\n');
+      console.log('[push-todo] Codex: Created AGENTS.md');
     }
+
     return true;
   } catch (error) {
-    console.log(`[push-todo] Codex: Could not set up AGENTS.md: ${error.message}`);
+    console.log(`[push-todo] Codex: Setup failed: ${error.message}`);
     return false;
   }
 }
