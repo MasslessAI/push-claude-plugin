@@ -108,7 +108,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'  # Node 22+ required for npm OIDC trusted publishing
+          node-version: '22'
+
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest && npm --version
 
       - name: Download arm64 binary
         uses: actions/download-artifact@v4
