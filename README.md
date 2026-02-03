@@ -1,5 +1,6 @@
 # Push Voice Tasks
 
+[![npm version](https://img.shields.io/npm/v/@masslessai/push-todo)](https://www.npmjs.com/package/@masslessai/push-todo)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-blue)](https://github.com/MasslessAI/push-todo-cli)
 
 Capture coding tasks by voice on your iPhone → work on them in Claude Code.
@@ -8,25 +9,19 @@ Capture coding tasks by voice on your iPhone → work on them in Claude Code.
 
 ## Install
 
-### Option A: Quick Install
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/install.sh | bash
+npm install -g @masslessai/push-todo
 ```
 
-Then restart Claude Code and run `/push-todo connect`.
+This single command installs everything:
+- `push-todo` CLI command
+- Claude Code plugin integration (`/push-todo`)
+- Native binary for E2EE (macOS)
 
-### Option B: Manual Install
-
-If you prefer to run the commands yourself:
-
+Then run:
+```bash
+push-todo connect
 ```
-/plugin marketplace add MasslessAI/push-todo-cli
-/plugin install push-todo@push-todo-cli
-/push-todo connect
-```
-
-> **Tip:** Enable auto-updates via `/plugin` → Marketplaces → push-todo-cli → Enable auto-update
 
 ---
 
@@ -34,97 +29,98 @@ If you prefer to run the commands yourself:
 
 | Command | Description |
 |---------|-------------|
-| `/push-todo` | Show tasks for current project |
-| `/push-todo connect` | Connect account, check for updates, fix issues |
-| `/push-todo #427` | Jump directly to task #427 |
-| `/push-todo review` | Review what you worked on and mark tasks complete |
+| `push-todo` | List tasks for current project |
+| `push-todo 427` | Show task #427 |
+| `push-todo connect` | Connect account, fix issues |
+| `push-todo search "auth"` | Search tasks |
+| `push-todo review` | Review completed tasks |
+| `push-todo watch` | Live daemon monitor |
+| `push-todo --help` | All options |
 
-You can also just say "show my Push tasks" and Claude will understand.
+**In Claude Code**, use `/push-todo` or just say "show my Push tasks".
 
 ---
 
 ## How It Works
 
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   iPhone    │───▶│    Push     │───▶│ Claude Code │
+│  (voice)    │    │   (sync)    │    │   (work)    │
+└─────────────┘    └─────────────┘    └─────────────┘
+```
+
 1. **Capture** — Speak your task on the Push iOS app
-2. **AI Processing** — Push extracts summary and routes to the right project
-3. **Notification** — When you start Claude Code: "You have 3 tasks from your iPhone"
-4. **Work** — Select a task, Claude helps you implement it
-5. **Complete** — Mark done, syncs back to your phone
+2. **AI Processing** — Push extracts summary and routes to project
+3. **Notification** — "You have 3 tasks from your iPhone"
+4. **Work** — Select a task, Claude helps implement it
+5. **Complete** — Mark done, syncs back to phone
 
 ---
 
 ## Updates
 
-Both install methods use the marketplace, so updates work the same way:
+```bash
+npm update -g @masslessai/push-todo
+```
 
-| Setting | How Updates Work |
-|---------|------------------|
-| **Auto-update ON** | Automatic at startup |
-| **Auto-update OFF** | Run `/push-todo connect` to check |
-
-Enable auto-updates: `/plugin` → Marketplaces → push-todo-cli → Enable auto-update
-
-The `/push-todo connect` command handles everything: checks for updates, validates your connection, and registers your project.
+Or run `push-todo connect` to check for updates.
 
 ---
 
 ## Requirements
 
 - [Push iOS app](https://pushto.do) — voice-powered task capture
-- Claude Code, OpenAI Codex, or Clawdbot
+- Node.js 18+
+- Claude Code (or OpenAI Codex, Clawdbot)
 
 ---
 
-## OpenAI Codex Support
+## Other Clients
 
-Full feature parity with Claude Code. Install with:
+### OpenAI Codex
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/codex/install-codex.sh | bash
 ```
 
-Then run `$push-todo connect` to get started.
+Then run `$push-todo connect`.
 
-**Updates:** Run `$push-todo connect` to check for updates and apply them automatically.
-
----
-
-## Clawdbot Support
-
-Full feature parity with Claude Code. Install with:
+### Clawdbot
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MasslessAI/push-todo-cli/main/clawdbot/install-clawdbot.sh | bash
 ```
 
-Then say `/push-todo connect` in Clawdbot to get started.
-
-**Updates:** Say `/push-todo connect` to check for updates and apply them automatically.
+Then run `/push-todo connect`.
 
 ---
 
 ## Troubleshooting
 
-**Most issues are fixed by running:**
-```
-/push-todo connect
+**Most issues fixed by:**
+```bash
+push-todo connect
 ```
 
-This will:
-- Re-authenticate if your session expired
-- Update the plugin if a new version is available
-- Re-register your project if needed
+This will re-authenticate, update, and re-register your project.
 
-**Still having issues?**
-- Check that you have active tasks in the Push app (not completed)
-- Verify config exists: `cat ~/.config/push/config`
+**Check config:**
+```bash
+cat ~/.config/push/config
+```
+
+**Uninstall:**
+```bash
+npm uninstall -g @masslessai/push-todo
+```
 
 ---
 
 ## Support
 
 - Website: [pushto.do](https://pushto.do)
-- Issues: [GitHub](https://github.com/MasslessAI/push-todo-cli/issues)
+- Issues: [GitHub Issues](https://github.com/MasslessAI/push-todo-cli/issues)
 
 ---
 
