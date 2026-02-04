@@ -180,14 +180,46 @@ export function stopDaemon() {
 }
 
 /**
- * Ensure daemon is running - called on every /push-todo command.
- * Same as Python's ensure_daemon_running().
+ * Get the installed package version (npm package version).
+ */
+function getInstalledVersion() {
+  try {
+    const pkgPath = join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return pkg.version || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ensure daemon is running with correct version - called on every /push-todo command.
+ * Auto-restarts daemon if version mismatch detected.
+ *
+ * This prevents stale daemons from running after npm package updates.
+ * See: /docs/20260204_daemon_heartbeat_status_indicator_implementation_plan.md
  */
 export function ensureDaemonRunning() {
   const status = getDaemonStatus();
+  const installedVersion = getInstalledVersion();
+
+  // Case 1: Daemon not running - start it
   if (!status.running) {
     startDaemon();
+    return;
   }
+
+  // Case 2: Daemon running but version mismatch - restart it
+  if (installedVersion && status.version && status.version !== installedVersion) {
+    // Version mismatch - restart daemon with new version
+    stopDaemon();
+    // Brief delay to ensure clean shutdown
+    const start = Date.now();
+    while (Date.now() - start < 500) {} // 500ms busy wait
+    startDaemon();
+  }
+
+  // Case 3: Daemon running with correct version - do nothing
 }
 
 export { PID_FILE, LOG_FILE, STATUS_FILE, PUSH_DIR };
