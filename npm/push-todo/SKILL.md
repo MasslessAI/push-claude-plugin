@@ -32,9 +32,11 @@ When this command is invoked:
    push-todo
    ```
 
-4. Present the tasks and ask which one to work on
+4. **Present ALL tasks** - Do NOT summarize or truncate the list. Show every active task in a table format. Users want to see their complete task list, not a curated subset. If there are 35 tasks, show all 35.
 
-5. When user selects a task, mark it as started and begin working
+5. Ask which task the user wants to work on
+
+6. When user selects a task, mark it as started and begin working
 
 ## Review Mode
 
