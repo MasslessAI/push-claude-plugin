@@ -6,6 +6,9 @@
 
 import { parseArgs } from 'util';
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import * as fetch from './fetch.js';
 import * as api from './api.js';
 import { runConnect } from './connect.js';
@@ -15,7 +18,23 @@ import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from '.
 import { getScreenshotPath, screenshotExists, openScreenshot } from './utils/screenshots.js';
 import { bold, red, cyan, dim, green } from './utils/colors.js';
 
-const VERSION = '3.5.0';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * Read version from package.json (DRY - single source of truth)
+ */
+function getVersion() {
+  try {
+    const pkgPath = join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return pkg.version || '3.0.0';
+  } catch {
+    return '3.0.0';
+  }
+}
+
+const VERSION = getVersion();
 
 const HELP_TEXT = `
 ${bold('push-todo')} - Voice tasks from Push iOS app for Claude Code

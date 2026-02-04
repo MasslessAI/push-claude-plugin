@@ -6,6 +6,13 @@
  * @module @masslessai/push-todo
  */
 
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 // CLI entry point
 export { run } from './cli.js';
 
@@ -110,5 +117,15 @@ export {
   colorsEnabled
 } from './utils/colors.js';
 
-// Version
-export const VERSION = '3.0.0';
+// Version - read from package.json (DRY - single source of truth)
+function getVersion() {
+  try {
+    const pkgPath = join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    return pkg.version || '3.0.0';
+  } catch {
+    return '3.0.0';
+  }
+}
+
+export const VERSION = getVersion();
