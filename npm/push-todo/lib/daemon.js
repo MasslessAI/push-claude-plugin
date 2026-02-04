@@ -341,13 +341,30 @@ async function apiRequest(endpoint, options = {}, retry = true) {
 async function fetchQueuedTasks() {
   try {
     const machineId = getMachineId();
+    const machineName = getMachineName();
     const params = new URLSearchParams();
     params.set('execution_status', 'queued');
     if (machineId) {
       params.set('machine_id', machineId);
     }
 
-    const response = await apiRequest(`synced-todos?${params}`);
+    // Get registered git_remotes for heartbeat tracking
+    // This enables iOS app to check if daemon is online for specific projects
+    const projects = getListedProjects();
+    const gitRemotes = Object.keys(projects);
+
+    // Add heartbeat headers for daemon status tracking
+    // See: /docs/20260204_daemon_heartbeat_status_indicator_implementation_plan.md
+    const heartbeatHeaders = {};
+    if (machineId && gitRemotes.length > 0) {
+      heartbeatHeaders['X-Machine-Id'] = machineId;
+      heartbeatHeaders['X-Machine-Name'] = machineName || 'Unknown Mac';
+      heartbeatHeaders['X-Git-Remotes'] = gitRemotes.join(',');
+    }
+
+    const response = await apiRequest(`synced-todos?${params}`, {
+      headers: heartbeatHeaders
+    });
 
     if (!response.ok) {
       if (response.status === 404) return [];
