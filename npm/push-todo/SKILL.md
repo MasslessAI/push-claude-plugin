@@ -91,6 +91,27 @@ Should I mark #701 and #427 as completed?
 push-todo --mark-completed TASK_UUID --completion-comment "Completed in Claude Code session"
 ```
 
+### Step 6: Learn Vocabulary (After Each Completion)
+
+After marking a task complete, contribute vocabulary terms to improve future task routing:
+
+1. **Extract 3-8 keywords from the session context:**
+   - File names / class names touched (e.g., `SyncService`, `RealtimeManager`)
+   - Technical concepts implemented (e.g., `WebSocket`, `reconnection`, `caching`)
+   - Domain-specific terms from the conversation
+
+2. **Call learn-vocabulary:**
+   ```bash
+   push-todo --learn-vocabulary TASK_UUID --keywords 'term1,term2,term3'
+   ```
+
+**Example:** After fixing a sync bug:
+```bash
+push-todo --learn-vocabulary abc123 --keywords 'SyncService,RealtimeManager,WebSocket,reconnection,realtime'
+```
+
+**Why this matters:** These keywords help the AI route future voice todos to the correct project. The more specific the terms, the better the matching.
+
 ### Key Principle
 
 **Session context is primary** - don't grep the entire codebase for every task. Use conversation history to identify what was actually worked on, then match against tasks semantically. This catches both:

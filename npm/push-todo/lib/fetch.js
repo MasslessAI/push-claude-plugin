@@ -8,7 +8,7 @@ import * as api from './api.js';
 import { getMachineId, getMachineName } from './machine-id.js';
 import { getRegistry } from './project-registry.js';
 import { getGitRemote, isGitRepo } from './utils/git.js';
-import { formatTaskForDisplay, formatTaskTable, formatSearchResult, formatBatchOffer } from './utils/format.js';
+import { formatTaskForDisplay, formatSearchResult } from './utils/format.js';
 import { bold, green, yellow, red, cyan, dim, muted } from './utils/colors.js';
 import { decryptTodoField, isE2EEAvailable } from './encryption.js';
 import { getAutoCommitEnabled, getMaxBatchSize } from './config.js';
@@ -92,34 +92,52 @@ export async function listTasks(options = {}) {
   const backlog = decryptedTasks.filter(t => !t.isCompleted && !t.is_completed && (t.isBacklog || t.is_backlog));
   const completed = decryptedTasks.filter(t => t.isCompleted || t.is_completed);
 
+  // Build scope description
+  const scope = gitRemote ? 'this project' : 'all projects';
+  const backlogSuffix = options.backlog ? ', backlog only' : '';
+  const includeSuffix = options.includeBacklog ? ', including backlog' : '';
+
+  // Determine which tasks to show
+  let tasksToShow = [];
+  if (options.backlog) {
+    tasksToShow = backlog;
+  } else if (options.completed) {
+    tasksToShow = completed;
+  } else {
+    tasksToShow = active;
+    if (options.includeBacklog) {
+      tasksToShow = [...active, ...backlog];
+    }
+  }
+
   // Header
-  const scope = gitRemote ? gitRemote : 'All Projects';
-  console.log(bold(`\nPush Tasks - ${scope}\n`));
+  console.log(`# ${tasksToShow.length} Active Tasks (${scope}${backlogSuffix}${includeSuffix})\n`);
 
-  // Active tasks
-  if (active.length > 0) {
-    console.log(green(`Active (${active.length}):`));
-    console.log(formatTaskTable(active));
+  // Show full details for each task (matching Python behavior)
+  for (const task of tasksToShow) {
+    const displayNum = task.displayNumber || task.display_number;
+    console.log(`---\n### #${displayNum}\n`);
+    console.log(formatTaskForDisplay(task));
     console.log('');
   }
 
-  // Backlog tasks (if requested)
-  if (backlog.length > 0 && (options.backlog || options.includeBacklog)) {
-    console.log(yellow(`Backlog (${backlog.length}):`));
-    console.log(formatTaskTable(backlog));
-    console.log('');
-  }
+  // Batch queue offer (only for active tasks, not backlog view)
+  if (!options.backlog && tasksToShow.length > 0) {
+    const maxBatch = 5; // Default batch size
+    const batchCount = Math.min(tasksToShow.length, maxBatch);
+    const batchTasks = tasksToShow.slice(0, batchCount);
+    const batchNumbers = batchTasks.map(t => String(t.displayNumber || t.display_number));
 
-  // Completed tasks (if requested)
-  if (completed.length > 0 && (options.completed || options.includeCompleted)) {
-    console.log(dim(`Completed (${completed.length}):`));
-    console.log(formatTaskTable(completed));
-    console.log('');
+    console.log('='.repeat(50));
+    console.log(`BATCH_OFFER: ${batchCount}`);
+    console.log(`BATCH_TASKS: ${batchNumbers.join(',')}`);
+    for (const t of batchTasks) {
+      const num = t.displayNumber || t.display_number;
+      const summary = (t.summary || 'No summary').slice(0, 50);
+      console.log(`  #${num} - ${summary}`);
+    }
+    console.log('='.repeat(50));
   }
-
-  // Summary
-  const total = active.length + (options.includeBacklog ? backlog.length : 0);
-  console.log(muted(`Showing ${total} task(s). Use --include-backlog or --completed for more.`));
 }
 
 /**
@@ -353,7 +371,17 @@ export async function offerBatch(options = {}) {
     return;
   }
 
-  console.log(formatBatchOffer(batch));
+  // Format batch offer inline (matching Python style)
+  const batchNumbers = batch.map(t => String(t.displayNumber || t.display_number));
+  console.log('='.repeat(50));
+  console.log(`BATCH_OFFER: ${batch.length}`);
+  console.log(`BATCH_TASKS: ${batchNumbers.join(',')}`);
+  for (const t of batch) {
+    const num = t.displayNumber || t.display_number;
+    const summary = (t.summary || 'No summary').slice(0, 50);
+    console.log(`  #${num} - ${summary}`);
+  }
+  console.log('='.repeat(50));
 }
 
 /**
@@ -381,6 +409,13 @@ export async function runReview(options = {}) {
     return;
   }
 
-  console.log(bold(`\nCompleted Tasks for Review (${decrypted.length}):\n`));
-  console.log(formatTaskTable(decrypted));
+  console.log(`# ${decrypted.length} Completed Tasks for Review\n`);
+
+  // Show full details for each task (matching Python behavior)
+  for (const task of decrypted) {
+    const displayNum = task.displayNumber || task.display_number;
+    console.log(`---\n### #${displayNum}\n`);
+    console.log(formatTaskForDisplay(task));
+    console.log('');
+  }
 }
