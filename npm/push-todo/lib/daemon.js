@@ -823,45 +823,14 @@ function executeTask(task) {
 
   // Analyze certainty
   const analysis = analyzeTaskCertainty(task);
-  const executionMode = determineExecutionMode(analysis);
+  let executionMode = determineExecutionMode(analysis);
 
   log(`Task #${displayNumber} execution mode: ${executionMode}`);
 
-  // Handle low-certainty tasks
+  // Low-certainty tasks: run in planning mode instead of blocking
   if (executionMode === 'clarify') {
-    log(`Task #${displayNumber} requires clarification (certainty too low)`);
-
-    const questions = analysis?.clarificationQuestions?.map(q => ({
-      question: q.question,
-      options: q.options,
-      priority: q.priority
-    })) || [];
-
-    let clarificationSummary = 'Task requires clarification before execution.';
-    if (analysis) {
-      clarificationSummary += ` Certainty score: ${analysis.score}`;
-      if (analysis.reasons?.length > 0) {
-        clarificationSummary += ` (${analysis.reasons[0].explanation})`;
-      }
-    }
-
-    updateTaskStatus(displayNumber, 'needs_clarification', {
-      summary: clarificationSummary,
-      certaintyScore: analysis?.score,
-      clarificationQuestions: questions
-    });
-
-    if (NOTIFY_ON_NEEDS_INPUT) {
-      sendMacNotification(
-        `Task #${displayNumber} needs clarification`,
-        `${summary.slice(0, 50)}... Low certainty - please clarify.`,
-        'Ping'
-      );
-    }
-
-    taskDetails.delete(displayNumber);
-    updateStatusFile();
-    return null;
+    log(`Task #${displayNumber} low certainty - running in planning mode instead of blocking`);
+    executionMode = 'planning';
   }
 
   // Create worktree
