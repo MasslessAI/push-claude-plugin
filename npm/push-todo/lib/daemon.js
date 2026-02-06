@@ -459,7 +459,7 @@ function getProjectPath(gitRemote) {
 
   try {
     const data = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'));
-    return data.projects?.[gitRemote]?.path || null;
+    return data.projects?.[gitRemote]?.localPath || data.projects?.[gitRemote]?.local_path || null;
   } catch {
     return null;
   }
@@ -474,7 +474,7 @@ function getListedProjects() {
     const data = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'));
     const result = {};
     for (const [remote, info] of Object.entries(data.projects || {})) {
-      result[remote] = info.path;
+      result[remote] = info.localPath || info.local_path;
     }
     return result;
   } catch {
