@@ -36,7 +36,16 @@ When this command is invoked:
 
 5. Ask which task the user wants to work on
 
-6. When user selects a task, mark it as started and begin working
+6. **Check for resumable daemon sessions first:**
+   - If the task output contains `**Session:** Resumable`, the daemon already ran Claude Code on this task
+   - Do NOT start working from scratch — the daemon's session has full context (files read, edits made, decisions)
+   - Instead, tell the user:
+     1. The daemon already worked on this task (show the execution summary if available)
+     2. To continue where the daemon left off, run in a **new terminal**: `push-todo resume <number>`
+     3. This resumes the exact Claude Code conversation with full history
+   - Only if the user explicitly says they want to start fresh should you begin new work
+
+7. If no resumable session exists, begin working on the task normally
 
 ## Review Mode
 
