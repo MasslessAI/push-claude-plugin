@@ -338,6 +338,24 @@ async function updateTaskStatus(displayNumber, status, extra = {}) {
       payload.machineName = machineName;
     }
 
+    // Auto-generate execution event for timeline
+    if (!payload.event) {
+      const eventType = status === 'running' ? 'started'
+        : status === 'completed' ? 'completed'
+        : status === 'failed' ? 'failed'
+        : null;
+      if (eventType) {
+        payload.event = {
+          type: eventType,
+          timestamp: new Date().toISOString(),
+          machineName: machineName || undefined,
+        };
+        if (extra.summary) payload.event.summary = extra.summary;
+        if (extra.error) payload.event.summary = extra.error;
+        if (extra.sessionId) payload.event.sessionId = extra.sessionId;
+      }
+    }
+
     const response = await apiRequest('update-task-execution', {
       method: 'PATCH',
       body: JSON.stringify(payload)
@@ -785,8 +803,15 @@ IMPORTANT:
 2. ALWAYS commit your changes before finishing. Use a descriptive commit message summarizing what you did. This is critical — uncommitted changes will be lost when the worktree is cleaned up.
 3. When you're done, the SessionEnd hook will automatically report completion to Supabase.`;
 
-  // Update status to running
-  updateTaskStatus(displayNumber, 'running');
+  // Update status to running (auto-generates 'started' event)
+  updateTaskStatus(displayNumber, 'running', {
+    event: {
+      type: 'started',
+      timestamp: new Date().toISOString(),
+      machineName: getMachineName() || undefined,
+      summary: summary.slice(0, 100),
+    }
+  });
 
   // Build Claude command
   const allowedTools = [
@@ -1224,7 +1249,13 @@ function cleanup() {
     // Mark as failed so the task doesn't stay as 'running' forever
     const duration = Math.floor((Date.now() - taskInfo.startTime) / 1000);
     updateTaskStatus(displayNumber, 'failed', {
-      error: `Daemon shutdown after ${duration}s`
+      error: `Daemon shutdown after ${duration}s`,
+      event: {
+        type: 'daemon_shutdown',
+        timestamp: new Date().toISOString(),
+        machineName: getMachineName() || undefined,
+        summary: `Daemon restarted after ${duration}s`,
+      }
     });
     const projectPath = taskProjectPaths.get(displayNumber);
     cleanupWorktree(displayNumber, projectPath);
