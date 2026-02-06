@@ -1215,12 +1215,19 @@ async function mainLoop() {
 function cleanup() {
   log('Daemon shutting down...');
 
-  // Kill running tasks
+  // Kill running tasks and mark them as failed in Supabase
   for (const [displayNumber, taskInfo] of runningTasks) {
     log(`Killing task #${displayNumber}`);
     try {
       taskInfo.process.kill('SIGTERM');
     } catch {}
+    // Mark as failed so the task doesn't stay as 'running' forever
+    const duration = Math.floor((Date.now() - taskInfo.startTime) / 1000);
+    updateTaskStatus(displayNumber, 'failed', {
+      error: `Daemon shutdown after ${duration}s`
+    });
+    const projectPath = taskProjectPaths.get(displayNumber);
+    cleanupWorktree(displayNumber, projectPath);
   }
 
   // Clean up files
