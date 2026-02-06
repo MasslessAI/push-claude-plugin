@@ -1006,13 +1006,22 @@ function handleTaskCompletion(displayNumber, exitCode) {
       log(`Task #${displayNumber} could not extract session_id`);
     }
 
+    // Auto-create PR first so we can include it in the summary
+    const prUrl = createPRForTask(displayNumber, summary, projectPath);
+
+    // Build execution summary for Supabase (shown in iOS timeline)
+    const durationStr = duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m ${duration % 60}s`;
+    const machineName = getMachineName() || 'Mac';
+    let executionSummary = `Ran for ${durationStr} on ${machineName}.`;
+    if (prUrl) {
+      executionSummary += ` PR: ${prUrl}`;
+    }
+
     updateTaskStatus(displayNumber, 'completed', {
       duration,
-      sessionId
+      sessionId,
+      summary: executionSummary
     });
-
-    // Auto-create PR
-    const prUrl = createPRForTask(displayNumber, summary, projectPath);
 
     if (NOTIFY_ON_COMPLETE) {
       const prNote = prUrl ? ' PR ready for review.' : '';
