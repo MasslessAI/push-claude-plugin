@@ -38,12 +38,9 @@ When this command is invoked:
 
 6. **Check for resumable daemon sessions first:**
    - If the task output contains `**Session:** Resumable`, the daemon already ran Claude Code on this task
-   - Do NOT start working from scratch — the daemon's session has full context (files read, edits made, decisions)
-   - Instead, tell the user:
-     1. The daemon already worked on this task (show the execution summary if available)
-     2. To continue where the daemon left off, run in a **new terminal**: `push-todo resume <number>`
-     3. This resumes the exact Claude Code conversation with full history
-   - Only if the user explicitly says they want to start fresh should you begin new work
+   - Do NOT start working from scratch — automatically load the daemon's session context
+   - Follow the [Auto-Resume from Session Transcript](#auto-resume-from-session-transcript) procedure below
+   - Only if the session transcript cannot be found should you begin working from scratch
 
 7. If no resumable session exists, begin working on the task normally
 
@@ -206,17 +203,74 @@ If no CLAUDE.md or README.md exists, generate minimal keywords from:
 - Git repo name
 - Primary file extensions (`.swift` -> iOS, `.py` -> Python, `.rs` -> Rust)
 
-## Resuming Daemon Sessions
+## Auto-Resume from Session Transcript
 
-When tasks are executed by the Push daemon on a Mac, each task creates a Claude Code session. These sessions can be resumed to continue exactly where the daemon left off.
+When a task has a resumable daemon session, automatically load the session context instead of starting from scratch. The daemon's session transcript contains every file read, edit, and decision — use it to continue intelligently.
 
-**When you see `**Session:** Resumable` in a task's output**, tell the user:
-- The task has a saved Claude Code session from the daemon
-- They can resume it with `push-todo resume <number>` (run in their terminal, not here)
-- This opens an **interactive** Claude Code session with the full conversation history - every file read, edit, and decision the daemon made
-- It must be run on the **same machine** that executed the task (sessions are stored locally)
+### Step 1: Locate the Session File
 
-**Important:** `push-todo resume` launches an interactive Claude Code terminal session. It cannot be run from within an existing Claude Code session. Instruct the user to run it directly in their terminal.
+The daemon runs in a git worktree. Find the session transcript:
+
+```bash
+# Get machine ID suffix for worktree name
+MACHINE_ID=$(cat ~/.config/push/machine_id 2>/dev/null)
+SUFFIX=$(echo "$MACHINE_ID" | rev | cut -d'-' -f1 | rev | cut -c1-8)
+TASK_NUM=<display_number>
+
+# Session files are stored under ~/.claude/projects/ with path-encoded directory names
+SESSION_DIR="$HOME/.claude/projects/-Users-$(whoami)-projects-push-${TASK_NUM}-${SUFFIX}"
+SESSION_ID=<session_id_from_task>
+
+# Check if transcript exists
+ls "${SESSION_DIR}/${SESSION_ID}.jsonl" 2>/dev/null
+```
+
+### Step 2: Extract Session Context
+
+Read the JSONL transcript and extract what the daemon did:
+
+```bash
+cat "${SESSION_DIR}/${SESSION_ID}.jsonl" | node -e "
+const lines = [];
+process.stdin.on('data', d => lines.push(d));
+process.stdin.on('end', () => {
+  const entries = Buffer.concat(lines).toString().split('\n')
+    .filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+  const assistantMsgs = entries.filter(e => e.type === 'assistant');
+  const edits = [];
+  const texts = [];
+
+  assistantMsgs.forEach(a => {
+    (a.message?.content || []).forEach(b => {
+      if (b.type === 'text' && b.text.trim()) texts.push(b.text.trim());
+      if (b.type === 'tool_use' && (b.name === 'Edit' || b.name === 'Write'))
+        edits.push(b.input?.file_path);
+    });
+  });
+
+  console.log('FILES_EDITED:', JSON.stringify(edits));
+  console.log('---TRANSCRIPT_START---');
+  texts.forEach(t => console.log(t));
+  console.log('---TRANSCRIPT_END---');
+});
+"
+```
+
+### Step 3: Present Context and Continue
+
+1. Tell the user what the daemon did (root cause found, files edited, commits made)
+2. Check if the daemon's changes are already in the main branch (it may have committed to a worktree branch)
+3. If the daemon's work is complete but not merged, help merge/cherry-pick the changes
+4. If the daemon's work is incomplete, continue from where it left off using the context
+
+### Fallback: Terminal Resume
+
+If the session transcript can't be read (file not found, parse error), tell the user they can also resume interactively in a **new terminal**:
+```
+push-todo resume <number>
+```
+This launches a full interactive Claude Code session with the daemon's complete conversation history.
 
 ## CLI Reference
 
