@@ -6,7 +6,7 @@
 
 import { parseArgs } from 'util';
 import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as fetch from './fetch.js';
@@ -17,6 +17,7 @@ import { showSettings, toggleSetting, setMaxBatchSize } from './config.js';
 import { ensureDaemonRunning, getDaemonStatus, startDaemon, stopDaemon } from './daemon-health.js';
 import { getScreenshotPath, screenshotExists, openScreenshot } from './utils/screenshots.js';
 import { bold, red, cyan, dim, green } from './utils/colors.js';
+import { getMachineId } from './machine-id.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -306,6 +307,37 @@ export async function run(argv) {
       process.exit(1);
     }
 
+    // Find the worktree directory where the daemon ran this task.
+    // Sessions are directory-scoped in Claude Code, so we must launch
+    // from the same directory (worktree) where the session was created.
+    let resumeCwd = process.cwd();
+    try {
+      const machineId = getMachineId();
+      const parts = machineId.split('-');
+      const suffix = parts.length > 1 ? parts[parts.length - 1].slice(0, 8) : machineId.slice(0, 8);
+      const worktreeName = `push-${displayNumber}-${suffix}`;
+
+      // Try to find the worktree relative to CWD's parent (sibling directory)
+      const candidate = join(dirname(process.cwd()), worktreeName);
+      if (existsSync(candidate)) {
+        resumeCwd = candidate;
+        console.log(`Found daemon worktree: ${candidate}`);
+      } else {
+        // Worktree was cleaned up after daemon finished, but the session file
+        // still exists at ~/.claude/projects/. Re-create the directory so Claude
+        // maps CWD to the correct session directory and finds the session.
+        try {
+          mkdirSync(candidate, { recursive: true });
+          resumeCwd = candidate;
+          console.log(`Re-created worktree directory for session lookup: ${candidate}`);
+        } catch {
+          console.log(dim(`Could not create worktree dir at ${candidate}, using current directory`));
+        }
+      }
+    } catch {
+      // Fall back to current directory
+    }
+
     // Launch claude --resume with the session ID
     console.log(`Resuming session for task #${displayNumber}...`);
     console.log(`Session ID: ${sessionId}`);
@@ -313,6 +345,7 @@ export async function run(argv) {
 
     // Use spawn with stdio: 'inherit' to give control to Claude
     const child = spawn('claude', ['--resume', sessionId], {
+      cwd: resumeCwd,
       stdio: 'inherit',
       shell: true
     });
