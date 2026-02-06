@@ -131,26 +131,23 @@ export function formatTaskForDisplay(task) {
   // Status
   if (task.isCompleted || task.is_completed) {
     lines.push('**Status:** ✅ Completed');
-    // Show session resume hint if session_id is available
-    const sessionId = task.executionSessionId || task.execution_session_id;
-    if (sessionId) {
-      lines.push(`**Session:** Available (\`push-todo resume ${displayNum}\`)`);
-    }
   } else if (execStatus === 'running') {
-    const machineName = task.executionMachineName || task.execution_machine_name;
-    const machineHint = machineName ? ` on ${machineName}` : '';
-    lines.push(`**Status:** 🔄 Running${machineHint}`);
+    lines.push('**Status:** 🔄 Running');
   } else if (execStatus === 'queued') {
     lines.push('**Status:** ⚡ Queued for Mac execution');
   } else if (execStatus === 'failed') {
     const error = task.executionError || task.execution_error || 'Unknown error';
     lines.push(`**Status:** ❌ Failed: ${error}`);
-  } else if (execStatus === 'needs_clarification') {
-    lines.push('**Status:** ❓ Needs clarification');
   } else if (task.isBacklog || task.is_backlog) {
     lines.push('**Status:** 📦 Backlog');
   } else {
     lines.push('**Status:** Active');
+  }
+
+  // Show session resume hint for any task with a session ID
+  const sessionId = task.executionSessionId || task.execution_session_id;
+  if (sessionId && displayNum) {
+    lines.push(`**Session:** Resumable (\`push-todo resume ${displayNum}\`) - continues the exact Claude Code conversation`);
   }
 
   const createdAt = task.createdAt || task.created_at;

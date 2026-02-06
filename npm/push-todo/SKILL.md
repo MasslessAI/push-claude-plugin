@@ -197,6 +197,18 @@ If no CLAUDE.md or README.md exists, generate minimal keywords from:
 - Git repo name
 - Primary file extensions (`.swift` -> iOS, `.py` -> Python, `.rs` -> Rust)
 
+## Resuming Daemon Sessions
+
+When tasks are executed by the Push daemon on a Mac, each task creates a Claude Code session. These sessions can be resumed to continue exactly where the daemon left off.
+
+**When you see `**Session:** Resumable` in a task's output**, tell the user:
+- The task has a saved Claude Code session from the daemon
+- They can resume it with `push-todo resume <number>` (run in their terminal, not here)
+- This opens an **interactive** Claude Code session with the full conversation history - every file read, edit, and decision the daemon made
+- It must be run on the **same machine** that executed the task (sessions are stored locally)
+
+**Important:** `push-todo resume` launches an interactive Claude Code terminal session. It cannot be run from within an existing Claude Code session. Instruct the user to run it directly in their terminal.
+
 ## CLI Reference
 
 The `push-todo` CLI supports these commands:
@@ -207,6 +219,7 @@ The `push-todo` CLI supports these commands:
 | `push-todo <number>` | Show specific task (e.g., `push-todo 427`) |
 | `push-todo --all-projects` | List tasks from all projects |
 | `push-todo --backlog` | Show backlog items |
+| `push-todo --resume <number>` | Resume the daemon's Claude Code session for a task |
 | `push-todo connect` | Run connection diagnostics and setup |
 | `push-todo search <query>` | Search tasks |
 | `push-todo --status` | Show connection status |
