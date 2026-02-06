@@ -893,7 +893,7 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
   ];
 
   if (executionMode === 'planning') {
-    claudeArgs.unshift('--plan');
+    claudeArgs.push('--permission-mode', 'plan');
   }
 
   try {
