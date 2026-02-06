@@ -8,12 +8,7 @@
  * Architecture:
  * - Git branch = worktree = Claude session (1:1:1 mapping)
  * - Uses Claude's --continue to resume sessions in worktrees
- * - Certainty analysis determines execution mode (immediate, planning, or clarify)
- *
- * Certainty-Based Execution:
- * - High certainty (>= 0.7): Execute immediately in standard mode
- * - Medium certainty (0.4-0.7): Execute with --plan flag (planning mode first)
- * - Low certainty (< 0.4): Update todo with clarification questions, skip execution
+ * - All tasks execute with bypassPermissions mode
  *
  * Ported from: plugins/push-todo/scripts/daemon.py
  */
@@ -236,57 +231,6 @@ function decryptTaskFields(task) {
   }
 
   return decrypted;
-}
-
-// ==================== Certainty Analysis ====================
-
-let CertaintyAnalyzer = null;
-let getExecutionMode = null;
-
-try {
-  const certainty = await import('./certainty.js');
-  CertaintyAnalyzer = certainty.CertaintyAnalyzer;
-  getExecutionMode = certainty.getExecutionMode;
-} catch {
-  // Certainty analysis not available
-}
-
-function analyzeTaskCertainty(task) {
-  if (!CertaintyAnalyzer) {
-    log('Certainty analysis not available, executing directly');
-    return null;
-  }
-
-  const content = task.normalizedContent || task.normalized_content ||
-    task.content || task.summary || '';
-  const summary = task.summary;
-  const transcript = task.originalTranscript || task.original_transcript;
-
-  try {
-    const analyzer = new CertaintyAnalyzer();
-    const analysis = analyzer.analyze(content, summary, transcript);
-
-    const displayNum = task.displayNumber || task.display_number;
-    log(`Task #${displayNum} certainty: ${analysis.score} (${analysis.level})`);
-
-    if (analysis.reasons && analysis.reasons.length > 0) {
-      for (const reason of analysis.reasons.slice(0, 3)) {
-        log(`  - ${reason.factor}: ${reason.explanation}`);
-      }
-    }
-
-    return analysis;
-  } catch (e) {
-    log(`Certainty analysis failed: ${e.message}`);
-    return null;
-  }
-}
-
-function determineExecutionMode(analysis) {
-  if (!analysis || !getExecutionMode) {
-    return 'immediate';
-  }
-  return getExecutionMode(analysis);
 }
 
 // ==================== API ====================
@@ -813,25 +757,13 @@ function executeTask(task) {
     taskId: task.id || task.todo_id || '',
     summary,
     status: 'running',
-    phase: 'analyzing',
-    detail: 'Analyzing task certainty...',
+    phase: 'starting',
+    detail: 'Starting Claude...',
     startedAt: Date.now(),
     gitRemote
   });
 
-  log(`Analyzing task #${displayNumber}: ${content.slice(0, 60)}...`);
-
-  // Analyze certainty
-  const analysis = analyzeTaskCertainty(task);
-  let executionMode = determineExecutionMode(analysis);
-
-  log(`Task #${displayNumber} execution mode: ${executionMode}`);
-
-  // Low-certainty tasks: run in planning mode instead of blocking
-  if (executionMode === 'clarify') {
-    log(`Task #${displayNumber} low certainty - running in planning mode instead of blocking`);
-    executionMode = 'planning';
-  }
+  log(`Executing task #${displayNumber}: ${content.slice(0, 60)}...`);
 
   // Create worktree
   const worktreePath = createWorktree(displayNumber, projectPath);
@@ -844,38 +776,16 @@ function executeTask(task) {
   taskProjectPaths.set(displayNumber, projectPath);
 
   // Build prompt
-  let prompt;
-  if (executionMode === 'planning') {
-    const reasonsText = analysis?.reasons?.slice(0, 3).map(r => `- ${r.explanation}`).join('\n') || '';
-    prompt = `Work on Push task #${displayNumber}:
-
-${content}
-
-IMPORTANT: This task has medium certainty (score: ${analysis?.score ?? 'N/A'}).
-Please START BY ENTERING PLAN MODE to clarify the approach before implementing.
-
-Reasons for lower certainty:
-${reasonsText}
-
-After your plan is approved, implement the changes.
-
-When you're done, the SessionEnd hook will automatically report completion to Supabase.
-
-If you need to understand the codebase, start by reading the CLAUDE.md file if it exists.`;
-  } else {
-    prompt = `Work on Push task #${displayNumber}:
+  const prompt = `Work on Push task #${displayNumber}:
 
 ${content}
 
 IMPORTANT: When you're done, the SessionEnd hook will automatically report completion to Supabase.
 
 If you need to understand the codebase, start by reading the CLAUDE.md file if it exists.`;
-  }
 
   // Update status to running
-  updateTaskStatus(displayNumber, 'running', {
-    certaintyScore: analysis?.score
-  });
+  updateTaskStatus(displayNumber, 'running');
 
   // Build Claude command
   const allowedTools = [
@@ -909,8 +819,7 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
       task,
       displayNumber,
       startTime: Date.now(),
-      projectPath,
-      executionMode
+      projectPath
     };
 
     runningTasks.set(displayNumber, taskInfo);
@@ -953,22 +862,13 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
       updateStatusFile();
     });
 
-    const modeDesc = executionMode === 'planning' ? 'planning mode' : 'standard mode';
     updateTaskDetail(displayNumber, {
       phase: 'executing',
-      detail: `Running Claude in ${modeDesc}...`,
+      detail: 'Running Claude...',
       claudePid: child.pid
     });
 
-    log(`Started Claude for task #${displayNumber} in ${modeDesc} (PID: ${child.pid})`);
-
-    if (executionMode === 'planning') {
-      sendMacNotification(
-        `Task #${displayNumber} started (planning)`,
-        `${summary.slice(0, 60)}...`,
-        'default'
-      );
-    }
+    log(`Started Claude for task #${displayNumber} (PID: ${child.pid})`);
 
     return taskInfo;
   } catch (error) {
@@ -1258,7 +1158,6 @@ async function mainLoop() {
   log(`Polling interval: ${POLL_INTERVAL / 1000}s`);
   log(`Max concurrent tasks: ${MAX_CONCURRENT_TASKS}`);
   log(`E2EE: ${e2eeAvailable ? 'Available' : 'Not available'}`);
-  log(`Certainty analysis: ${CertaintyAnalyzer ? 'Available' : 'Not available'}`);
   log(`Log file: ${LOG_FILE}`);
 
   // Show registered projects
