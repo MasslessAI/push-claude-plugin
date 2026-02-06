@@ -780,9 +780,10 @@ function executeTask(task) {
 
 ${content}
 
-IMPORTANT: When you're done, the SessionEnd hook will automatically report completion to Supabase.
-
-If you need to understand the codebase, start by reading the CLAUDE.md file if it exists.`;
+IMPORTANT:
+1. If you need to understand the codebase, start by reading the CLAUDE.md file if it exists.
+2. ALWAYS commit your changes before finishing. Use a descriptive commit message summarizing what you did. This is critical — uncommitted changes will be lost when the worktree is cleaned up.
+3. When you're done, the SessionEnd hook will automatically report completion to Supabase.`;
 
   // Update status to running
   updateTaskStatus(displayNumber, 'running');

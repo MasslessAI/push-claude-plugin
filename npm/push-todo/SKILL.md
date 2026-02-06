@@ -213,74 +213,56 @@ If no CLAUDE.md or README.md exists, generate minimal keywords from:
 - Git repo name
 - Primary file extensions (`.swift` -> iOS, `.py` -> Python, `.rs` -> Rust)
 
-## Auto-Resume from Session Transcript
+## Auto-Resume from Daemon Session
 
-When a task has a resumable daemon session, automatically load the session context instead of starting from scratch. The daemon's session transcript contains every file read, edit, and decision — use it to continue intelligently.
+When a task has a resumable daemon session, use the git worktree branch directly instead of starting from scratch. The daemon commits its changes to a worktree branch — use that branch to see exactly what was done.
 
-### Step 1: Locate the Session File
+### Step 1: Find the Worktree Branch
 
-The daemon runs in a git worktree. Find the session transcript:
+The daemon creates a branch named `push-{number}-{suffix}`:
 
 ```bash
-# Get machine ID suffix for worktree name
+# Get machine ID suffix
 MACHINE_ID=$(cat ~/.config/push/machine_id 2>/dev/null)
 SUFFIX=$(echo "$MACHINE_ID" | rev | cut -d'-' -f1 | rev | cut -c1-8)
 TASK_NUM=<display_number>
+BRANCH="push-${TASK_NUM}-${SUFFIX}"
 
-# Session files are stored under ~/.claude/projects/ with path-encoded directory names
+# Check if branch exists and has commits
+git log master..${BRANCH} --oneline 2>/dev/null
+```
+
+### Step 2: Get Semantic Summary from Session Transcript
+
+Read the session transcript for context on *what* and *why* (reasoning, decisions):
+
+```bash
 SESSION_DIR="$HOME/.claude/projects/-Users-$(whoami)-projects-push-${TASK_NUM}-${SUFFIX}"
 SESSION_ID=<session_id_from_task>
 
-# Check if transcript exists
-ls "${SESSION_DIR}/${SESSION_ID}.jsonl" 2>/dev/null
-```
-
-### Step 2: Extract Session Context
-
-Read the JSONL transcript and extract what the daemon did:
-
-```bash
-cat "${SESSION_DIR}/${SESSION_ID}.jsonl" | node -e "
+# Extract just the text reasoning (not file edits — we get those from git)
+cat "${SESSION_DIR}/${SESSION_ID}.jsonl" 2>/dev/null | node -e "
 const lines = [];
 process.stdin.on('data', d => lines.push(d));
 process.stdin.on('end', () => {
   const entries = Buffer.concat(lines).toString().split('\n')
     .filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-
-  const assistantMsgs = entries.filter(e => e.type === 'assistant');
-  const edits = [];
-  const texts = [];
-
-  assistantMsgs.forEach(a => {
-    (a.message?.content || []).forEach(b => {
-      if (b.type === 'text' && b.text.trim()) texts.push(b.text.trim());
-      if (b.type === 'tool_use' && (b.name === 'Edit' || b.name === 'Write'))
-        edits.push(b.input?.file_path);
-    });
-  });
-
-  console.log('FILES_EDITED:', JSON.stringify(edits));
-  console.log('---TRANSCRIPT_START---');
+  const texts = entries.filter(e => e.type === 'assistant')
+    .flatMap(a => (a.message?.content || []).filter(b => b.type === 'text' && b.text.trim()).map(b => b.text.trim()));
   texts.forEach(t => console.log(t));
-  console.log('---TRANSCRIPT_END---');
 });
 "
 ```
 
-### Step 3: Present Context and Continue
+### Step 3: Review Changes and Act
 
-1. Tell the user what the daemon did (root cause found, files edited, commits made)
-2. Check if the daemon's changes are already in the main branch (it may have committed to a worktree branch)
-3. If the daemon's work is complete but not merged, help merge/cherry-pick the changes
-4. If the daemon's work is incomplete, continue from where it left off using the context
-
-### Fallback: Terminal Resume
-
-If the session transcript can't be read (file not found, parse error), tell the user they can also resume interactively in a **new terminal**:
-```
-push-todo resume <number>
-```
-This launches a full interactive Claude Code session with the daemon's complete conversation history.
+1. **Show the user** what the daemon did: semantic summary + `git diff master...${BRANCH}`
+2. **If the branch has commits** (daemon committed):
+   - Show the diff and ask if user wants to cherry-pick/merge to current branch
+   - Use `git cherry-pick <commit>` or `git merge ${BRANCH}` as appropriate
+3. **If the branch has NO commits** (daemon didn't commit — older daemon versions):
+   - Fall back to reading edits from the session transcript JSONL
+4. **If work is incomplete**, continue from where the daemon left off using the context from the transcript and the branch state
 
 ## Live Session Status
 
