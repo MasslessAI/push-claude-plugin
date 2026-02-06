@@ -341,7 +341,7 @@ async function updateTaskStatus(displayNumber, status, extra = {}) {
     // Auto-generate execution event for timeline
     if (!payload.event) {
       const eventType = status === 'running' ? 'started'
-        : status === 'completed' ? 'completed'
+        : status === 'session_finished' ? 'session_finished'
         : status === 'failed' ? 'failed'
         : null;
       if (eventType) {
@@ -940,7 +940,7 @@ function handleTaskCompletion(displayNumber, exitCode) {
       executionSummary += ` PR: ${prUrl}`;
     }
 
-    updateTaskStatus(displayNumber, 'completed', {
+    updateTaskStatus(displayNumber, 'session_finished', {
       duration,
       sessionId,
       summary: executionSummary
@@ -960,7 +960,7 @@ function handleTaskCompletion(displayNumber, exitCode) {
       summary,
       completedAt: new Date().toISOString(),
       duration,
-      status: 'completed',
+      status: 'session_finished',
       prUrl,
       sessionId
     });

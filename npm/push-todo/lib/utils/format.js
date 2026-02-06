@@ -58,6 +58,8 @@ export function formatTaskForDisplay(task) {
     statusPrefix = '🔄 '; // Running on Mac
   } else if (execStatus === 'queued') {
     statusPrefix = '⚡ '; // Queued for Mac
+  } else if (execStatus === 'session_finished') {
+    statusPrefix = '🏁 '; // Session finished on Mac
   } else if (execStatus === 'failed') {
     statusPrefix = '❌ '; // Failed
   } else if (execStatus === 'needs_clarification') {
@@ -223,6 +225,8 @@ export function formatTaskTable(tasks) {
       status = '🔄 Running';
     } else if (taskExecStatus === 'queued') {
       status = '⚡ Queued';
+    } else if (taskExecStatus === 'session_finished') {
+      status = '🏁 Finished';
     } else if (taskExecStatus === 'failed') {
       status = '❌ Failed';
     } else if (task.isBacklog || task.is_backlog) {
