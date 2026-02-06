@@ -961,12 +961,14 @@ function handleTaskCompletion(displayNumber, exitCode) {
     });
   }
 
-  // Cleanup
+  // Cleanup internal tracking
   taskDetails.delete(displayNumber);
   taskLastOutput.delete(displayNumber);
   taskStdoutBuffer.delete(displayNumber);
   taskProjectPaths.delete(displayNumber);
 
+  // Always clean up worktree — the branch preserves all committed work.
+  // On re-run, createWorktree() recreates from the existing branch.
   cleanupWorktree(displayNumber, projectPath);
   updateStatusFile();
 }
