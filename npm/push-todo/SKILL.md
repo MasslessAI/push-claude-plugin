@@ -36,13 +36,23 @@ When this command is invoked:
 
 5. Ask which task the user wants to work on
 
-6. **Check for resumable daemon sessions first:**
+6. **Check if the daemon is currently working on this task:**
+   - If the task output shows `**Status:** 🔄 Running`:
+     - The daemon is actively working on this task RIGHT NOW
+     - Follow the [Live Session Status](#live-session-status) procedure to show progress
+     - Do NOT start working on this task — the daemon is already on it
+   - If the task output shows `**Status:** ⚡ Queued for Mac execution`:
+     - The task is queued and waiting for the daemon to pick it up
+     - Tell the user: "This task is queued and will be picked up by the daemon shortly."
+     - Do NOT start working on this task
+
+7. **Check for resumable daemon sessions:**
    - If the task output contains `**Session:** Resumable`, the daemon already ran Claude Code on this task
    - Do NOT start working from scratch — automatically load the daemon's session context
    - Follow the [Auto-Resume from Session Transcript](#auto-resume-from-session-transcript) procedure below
    - Only if the session transcript cannot be found should you begin working from scratch
 
-7. If no resumable session exists, begin working on the task normally
+8. If no resumable session exists, begin working on the task normally
 
 ## Review Mode
 
@@ -271,6 +281,79 @@ If the session transcript can't be read (file not found, parse error), tell the 
 push-todo resume <number>
 ```
 This launches a full interactive Claude Code session with the daemon's complete conversation history.
+
+## Live Session Status
+
+When a task is currently running (daemon is actively working on it), read the live session transcript to show the user what's happening.
+
+### Step 1: Locate the Live Session File
+
+The daemon runs Claude in a git worktree. Find the active session:
+
+```bash
+# Get machine ID suffix for worktree name
+MACHINE_ID=$(cat ~/.config/push/machine_id 2>/dev/null)
+SUFFIX=$(echo "$MACHINE_ID" | rev | cut -d'-' -f1 | rev | cut -c1-8)
+TASK_NUM=<display_number>
+
+# Session files are stored under ~/.claude/projects/ with path-encoded directory names
+SESSION_DIR="$HOME/.claude/projects/-Users-$(whoami)-projects-push-${TASK_NUM}-${SUFFIX}"
+
+# Find the most recent .jsonl file (the active session)
+ls -t "${SESSION_DIR}"/*.jsonl 2>/dev/null | head -1
+```
+
+### Step 2: Extract Recent Activity
+
+Read the last portion of the JSONL transcript to see what Claude is currently doing:
+
+```bash
+tail -100 "<session_file>" | node -e "
+const lines = [];
+process.stdin.on('data', d => lines.push(d));
+process.stdin.on('end', () => {
+  const entries = Buffer.concat(lines).toString().split('\n')
+    .filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+  const assistantMsgs = entries.filter(e => e.type === 'assistant');
+  const edits = [];
+  const reads = [];
+  const texts = [];
+
+  assistantMsgs.forEach(a => {
+    (a.message?.content || []).forEach(b => {
+      if (b.type === 'text' && b.text.trim()) texts.push(b.text.trim());
+      if (b.type === 'tool_use') {
+        if (b.name === 'Edit' || b.name === 'Write') edits.push(b.input?.file_path);
+        if (b.name === 'Read') reads.push(b.input?.file_path);
+      }
+    });
+  });
+
+  console.log('FILES_READ:', JSON.stringify([...new Set(reads)].slice(-10)));
+  console.log('FILES_EDITED:', JSON.stringify([...new Set(edits)]));
+  console.log('---RECENT_ACTIVITY---');
+  texts.slice(-5).forEach(t => console.log(t.slice(0, 200)));
+  console.log('---END---');
+});
+"
+```
+
+### Step 3: Present Status to User
+
+Show a concise summary:
+1. "The daemon is currently working on this task"
+2. Files it has read so far
+3. Files it has edited so far
+4. Its most recent reasoning/activity (last few text messages)
+5. "Check back in a few minutes, or run `/push-todo <number>` again for an update"
+
+Do NOT offer to start working on the task — the daemon is already handling it.
+
+### Fallback
+
+If the session file cannot be found (daemon just started, no output yet):
+- Tell the user: "The daemon just started working on this task. Run `/push-todo <number>` again in a minute for a progress update."
 
 ## CLI Reference
 
