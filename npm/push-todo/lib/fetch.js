@@ -88,8 +88,15 @@ export async function listTasks(options = {}) {
   }
 
   // Group by status for display
-  const active = decryptedTasks.filter(t => !t.isCompleted && !t.is_completed && !t.isBacklog && !t.is_backlog);
-  const backlog = decryptedTasks.filter(t => !t.isCompleted && !t.is_completed && (t.isBacklog || t.is_backlog));
+  // Execution status tasks (queued/running) are separated from regular active tasks
+  const getExecStatus = t => t.executionStatus || t.execution_status;
+  const isRunningOrQueued = t => {
+    const es = getExecStatus(t);
+    return es === 'queued' || es === 'running';
+  };
+  const running = decryptedTasks.filter(t => !t.isCompleted && !t.is_completed && isRunningOrQueued(t));
+  const active = decryptedTasks.filter(t => !t.isCompleted && !t.is_completed && !t.isBacklog && !t.is_backlog && !isRunningOrQueued(t));
+  const backlog = decryptedTasks.filter(t => !t.isCompleted && !t.is_completed && (t.isBacklog || t.is_backlog) && !isRunningOrQueued(t));
   const completed = decryptedTasks.filter(t => t.isCompleted || t.is_completed);
 
   // Build scope description
@@ -110,8 +117,20 @@ export async function listTasks(options = {}) {
     }
   }
 
+  // Show running/queued section first (always, unless viewing backlog/completed only)
+  if (!options.backlog && !options.completed && running.length > 0) {
+    console.log(`# ${running.length} Running/Queued Tasks (${scope})\n`);
+    for (const task of running) {
+      const displayNum = task.displayNumber || task.display_number;
+      console.log(`---\n### #${displayNum}\n`);
+      console.log(formatTaskForDisplay(task));
+      console.log('');
+    }
+  }
+
   // Header
-  console.log(`# ${tasksToShow.length} Active Tasks (${scope}${backlogSuffix}${includeSuffix})\n`);
+  const totalCount = tasksToShow.length;
+  console.log(`# ${totalCount} Active Tasks (${scope}${backlogSuffix}${includeSuffix})\n`);
 
   // Show full details for each task (matching Python behavior)
   for (const task of tasksToShow) {

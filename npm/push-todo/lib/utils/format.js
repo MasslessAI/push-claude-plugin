@@ -50,9 +50,18 @@ export function formatTaskForDisplay(task) {
   const displayNum = task.displayNumber || task.display_number;
 
   // Determine status prefix
+  const execStatus = task.executionStatus || task.execution_status;
   let statusPrefix = '';
   if (task.isCompleted || task.is_completed) {
     statusPrefix = '✅ '; // Completed
+  } else if (execStatus === 'running') {
+    statusPrefix = '🔄 '; // Running on Mac
+  } else if (execStatus === 'queued') {
+    statusPrefix = '⚡ '; // Queued for Mac
+  } else if (execStatus === 'failed') {
+    statusPrefix = '❌ '; // Failed
+  } else if (execStatus === 'needs_clarification') {
+    statusPrefix = '❓ '; // Needs clarification
   } else if (task.isBacklog || task.is_backlog) {
     statusPrefix = '📦 '; // Backlog
   }
@@ -127,6 +136,17 @@ export function formatTaskForDisplay(task) {
     if (sessionId) {
       lines.push(`**Session:** Available (\`push-todo resume ${displayNum}\`)`);
     }
+  } else if (execStatus === 'running') {
+    const machineName = task.executionMachineName || task.execution_machine_name;
+    const machineHint = machineName ? ` on ${machineName}` : '';
+    lines.push(`**Status:** 🔄 Running${machineHint}`);
+  } else if (execStatus === 'queued') {
+    lines.push('**Status:** ⚡ Queued for Mac execution');
+  } else if (execStatus === 'failed') {
+    const error = task.executionError || task.execution_error || 'Unknown error';
+    lines.push(`**Status:** ❌ Failed: ${error}`);
+  } else if (execStatus === 'needs_clarification') {
+    lines.push('**Status:** ❓ Needs clarification');
   } else if (task.isBacklog || task.is_backlog) {
     lines.push('**Status:** 📦 Backlog');
   } else {
@@ -198,9 +218,16 @@ export function formatTaskTable(tasks) {
       summary = summary.slice(0, 27) + '…';
     }
 
+    const taskExecStatus = task.executionStatus || task.execution_status;
     let status = 'Active';
     if (task.isCompleted || task.is_completed) {
       status = '✅ Done';
+    } else if (taskExecStatus === 'running') {
+      status = '🔄 Running';
+    } else if (taskExecStatus === 'queued') {
+      status = '⚡ Queued';
+    } else if (taskExecStatus === 'failed') {
+      status = '❌ Failed';
     } else if (task.isBacklog || task.is_backlog) {
       status = '📦 Later';
     }
