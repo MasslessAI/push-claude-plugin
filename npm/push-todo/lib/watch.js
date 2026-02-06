@@ -50,7 +50,7 @@ function formatTaskLine(task) {
       statusIcon = '●';
       statusColor = codes.green;
       break;
-    case 'completed':
+    case 'session_finished':
       statusIcon = '✓';
       statusColor = codes.green;
       break;
@@ -191,7 +191,7 @@ function formatUI(status) {
     lines.push('');
 
     for (const task of completedToday.slice(-3)) {
-      lines.push(formatTaskLine({ ...task, status: 'completed' }));
+      lines.push(formatTaskLine({ ...task, status: 'session_finished' }));
     }
 
     if (completedToday.length > 3) {

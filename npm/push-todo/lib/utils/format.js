@@ -137,6 +137,8 @@ export function formatTaskForDisplay(task) {
     lines.push('**Status:** 🔄 Running');
   } else if (execStatus === 'queued') {
     lines.push('**Status:** ⚡ Queued for Mac execution');
+  } else if (execStatus === 'session_finished') {
+    lines.push('**Status:** 🏁 Session finished');
   } else if (execStatus === 'failed') {
     const error = task.executionError || task.execution_error || 'Unknown error';
     lines.push(`**Status:** ❌ Failed: ${error}`);
