@@ -889,12 +889,9 @@ If you need to understand the codebase, start by reading the CLAUDE.md file if i
   const claudeArgs = [
     '-p', prompt,
     '--allowedTools', allowedTools,
-    '--output-format', 'json'
+    '--output-format', 'json',
+    '--permission-mode', 'bypassPermissions'
   ];
-
-  if (executionMode === 'planning') {
-    claudeArgs.push('--permission-mode', 'plan');
-  }
 
   try {
     const child = spawn('claude', claudeArgs, {
