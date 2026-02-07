@@ -1,10 +1,10 @@
 {
   "name": "@masslessai/push-todo",
-  "version": "3.7.2",
+  "version": "3.7.3",
   "description": "Voice tasks from Push iOS app for Claude Code",
   "type": "module",
   "bin": {
-    "push-todo": "./bin/push-todo.js"
+    "push-todo": "bin/push-todo.js"
   },
   "main": "./lib/index.js",
   "exports": {
@@ -44,7 +44,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MasslessAI/push-todo-cli"
+    "url": "git+https://github.com/MasslessAI/push-todo-cli.git"
   },
   "homepage": "https://pushto.do",
   "bugs": {
