@@ -409,11 +409,15 @@ async function claimTask(displayNumber) {
     return true;
   }
 
+  const suffix = getWorktreeSuffix();
+  const branch = `push-${displayNumber}-${suffix}`;
+
   const payload = {
     displayNumber,
     status: 'running',
     machineId,
     machineName,
+    branch,
     atomic: true
   };
 
