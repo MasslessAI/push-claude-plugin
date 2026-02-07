@@ -618,30 +618,6 @@ async function validateApiKeyStatus() {
   return { status: 'invalid', message: result.reason };
 }
 
-/**
- * Validate machine registration.
- */
-async function validateMachineStatus() {
-  const machineId = getMachineId();
-  const machineName = getMachineName();
-
-  try {
-    const result = await api.validateMachine(machineId);
-    return {
-      status: 'valid',
-      machineId,
-      machineName,
-      ...result
-    };
-  } catch (error) {
-    return {
-      status: 'error',
-      machineId,
-      machineName,
-      message: error.message
-    };
-  }
-}
 
 /**
  * Validate project registration (full validation with warnings).
@@ -742,11 +718,7 @@ function validateProjectStatus() {
  * Get device name for registration.
  */
 function getDeviceName() {
-  try {
-    return require('os').hostname() || 'Unknown Device';
-  } catch {
-    return 'Unknown Device';
-  }
+  return getMachineName() || 'Unknown Device';
 }
 
 /**
@@ -1090,13 +1062,6 @@ export async function runConnect(options = {}) {
     return;
   }
 
-  // Handle --validate-machine (JSON output)
-  if (options['validate-machine'] || options.validateMachine) {
-    const result = await validateMachineStatus();
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
   // Handle --validate-project (JSON output)
   if (options['validate-project'] || options.validateProject) {
     const result = validateProjectStatus();
@@ -1191,13 +1156,8 @@ export async function runConnect(options = {}) {
         }
       }
 
-      // Validate and show machine ID
-      const machineInfo = await validateMachineStatus();
-      if (machineInfo.status === 'valid') {
-        console.log(`  Machine: ${machineInfo.machineName}`);
-      } else {
-        console.log(`  ⚠️  Machine ID: ${machineInfo.message}`);
-      }
+      // Show machine info
+      console.log(`  Machine: ${getMachineName()}`);
       console.log('  ' + '='.repeat(40));
       console.log('');
 
@@ -1274,13 +1234,8 @@ export async function runConnect(options = {}) {
     }
   }
 
-  // Validate and show machine ID
-  const machineInfo = await validateMachineStatus();
-  if (machineInfo.status === 'valid') {
-    console.log(`  Machine: ${machineInfo.machineName}`);
-  } else {
-    console.log(`  ⚠️  Machine ID: ${machineInfo.message}`);
-  }
+  // Show machine info
+  console.log(`  Machine: ${getMachineName()}`);
   console.log('  ' + '='.repeat(40));
   console.log('');
   console.log('  Your iOS app will sync this automatically.');
@@ -1297,7 +1252,6 @@ export {
   checkVersion,
   doUpdate,
   validateApiKeyStatus,
-  validateMachineStatus,
   validateProjectStatus,
   validateProjectInfo,
   setupE2EE,

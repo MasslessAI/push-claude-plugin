@@ -39,7 +39,6 @@ export {
   updateTaskExecution,
   validateApiKey,
   registerProject,
-  validateMachine,
   getLatestVersion
 } from './api.js';
 

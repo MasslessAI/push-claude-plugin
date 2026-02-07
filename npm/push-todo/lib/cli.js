@@ -89,7 +89,6 @@ ${bold('CONNECT OPTIONS:')}
   --check-version                  Check for updates (JSON output)
   --update                         Update to latest version
   --validate-key                   Validate API key (JSON output)
-  --validate-machine               Validate machine registration (JSON output)
   --validate-project               Validate project registration (JSON output)
   --store-e2ee-key <key>           Import E2EE encryption key
   --description <text>             Project description (with connect)
@@ -134,7 +133,6 @@ const options = {
   'check-version': { type: 'boolean' },
   'update': { type: 'boolean' },
   'validate-key': { type: 'boolean' },
-  'validate-machine': { type: 'boolean' },
   'validate-project': { type: 'boolean' },
   'store-e2ee-key': { type: 'string' },
   'description': { type: 'string' }

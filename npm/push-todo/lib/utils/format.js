@@ -148,6 +148,16 @@ export function formatTaskForDisplay(task) {
     lines.push('**Status:** Active');
   }
 
+  // Show execution summary (semantic + machine metadata)
+  const execSummary = task.executionSummary || task.execution_summary;
+  if (execSummary) {
+    lines.push('');
+    lines.push('### What was done');
+    for (const line of execSummary.split('\n').filter(Boolean)) {
+      lines.push(`> ${line}`);
+    }
+  }
+
   // Show session resume hint for any task with a session ID
   const sessionId = task.executionSessionId || task.execution_session_id;
   if (sessionId && displayNum) {

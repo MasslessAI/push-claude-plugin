@@ -297,8 +297,8 @@ async function fetchQueuedTasks() {
     const projects = getListedProjects();
     const gitRemotes = Object.keys(projects);
 
-    // Add heartbeat headers for daemon status tracking
-    // See: /docs/20260204_daemon_heartbeat_status_indicator_implementation_plan.md
+    // Add machine registry headers for daemon status tracking
+    // See: /docs/20260204_daemon_heartbeat_status_indicator_implementation_plan.md (machine_registry table)
     const heartbeatHeaders = {};
     if (machineId && gitRemotes.length > 0) {
       heartbeatHeaders['X-Machine-Id'] = machineId;
@@ -711,6 +711,43 @@ function extractSessionIdFromStdout(proc, buffer) {
   return null;
 }
 
+// ==================== Semantic Summary Extraction ====================
+
+/**
+ * Generate a semantic summary by resuming the Claude session in --print mode.
+ * Claude already has full context of what it did — we just ask it to summarize.
+ * Uses execFileSync (not execSync) to avoid shell injection.
+ *
+ * @param {string} worktreePath - Path to the git worktree where Claude ran
+ * @param {string} sessionId - Claude session ID
+ * @returns {string|null} A short semantic summary, or null if extraction fails
+ */
+function extractSemanticSummary(worktreePath, sessionId) {
+  if (!worktreePath || !sessionId) return null;
+
+  try {
+    const result = execFileSync('claude', [
+      '--resume', sessionId,
+      '--print',
+      'Summarize what you accomplished in 1-2 sentences. Be specific about outcomes (what was built, fixed, drafted), not process. If you failed or got stuck, explain what went wrong. If no code changes were made, say so. Do not use markdown.'
+    ], {
+      cwd: worktreePath,
+      timeout: 30000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    const summary = result.toString().trim();
+    if (summary && summary.length > 0) {
+      // Cap at 300 chars to keep it concise
+      return summary.length > 300 ? summary.slice(0, 297) + '...' : summary;
+    }
+    return null;
+  } catch (error) {
+    log(`Semantic summary extraction failed: ${error.message}`);
+    return null;
+  }
+}
+
 // ==================== Task Execution ====================
 
 function updateTaskDetail(displayNumber, updates) {
@@ -918,24 +955,32 @@ function handleTaskCompletion(displayNumber, exitCode) {
 
   log(`Task #${displayNumber} completed with code ${exitCode} (${duration}s)`);
 
+  // Extract session ID for both success and failure (needed for AI summary)
+  const buffer = taskStdoutBuffer.get(displayNumber) || [];
+  const sessionId = extractSessionIdFromStdout(taskInfo.process, buffer);
+  const worktreePath = getWorktreePath(displayNumber, projectPath);
+  const durationStr = duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m ${duration % 60}s`;
+  const machineName = getMachineName() || 'Mac';
+
+  if (sessionId) {
+    log(`Task #${displayNumber} session_id: ${sessionId}`);
+  } else {
+    log(`Task #${displayNumber} could not extract session_id`);
+  }
+
   if (exitCode === 0) {
-    // Extract session ID
-    const buffer = taskStdoutBuffer.get(displayNumber) || [];
-    const sessionId = extractSessionIdFromStdout(taskInfo.process, buffer);
-
-    if (sessionId) {
-      log(`Task #${displayNumber} session_id: ${sessionId}`);
-    } else {
-      log(`Task #${displayNumber} could not extract session_id`);
-    }
-
     // Auto-create PR first so we can include it in the summary
     const prUrl = createPRForTask(displayNumber, summary, projectPath);
 
-    // Build execution summary for Supabase (shown in iOS timeline)
-    const durationStr = duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m ${duration % 60}s`;
-    const machineName = getMachineName() || 'Mac';
-    let executionSummary = `Ran for ${durationStr} on ${machineName}.`;
+    // Ask Claude to summarize what it accomplished
+    const semanticSummary = extractSemanticSummary(worktreePath, sessionId);
+
+    // Combine: semantic summary first (what), then machine metadata (how)
+    let executionSummary = '';
+    if (semanticSummary) {
+      executionSummary = semanticSummary + '\n';
+    }
+    executionSummary += `Ran for ${durationStr} on ${machineName}.`;
     if (prUrl) {
       executionSummary += ` PR: ${prUrl}`;
     }
@@ -966,7 +1011,13 @@ function handleTaskCompletion(displayNumber, exitCode) {
     });
   } else {
     const stderr = taskInfo.process.stderr?.read()?.toString() || '';
-    const errorMsg = `Exit code ${exitCode}: ${stderr.slice(0, 200)}`;
+
+    // Ask Claude to explain what went wrong (if session exists)
+    const failureSummary = extractSemanticSummary(worktreePath, sessionId);
+    const errorMsg = failureSummary
+      ? `${failureSummary}\nExit code ${exitCode}. Ran for ${durationStr} on ${machineName}.`
+      : `Exit code ${exitCode}: ${stderr.slice(0, 200)}`;
+
     updateTaskStatus(displayNumber, 'failed', { error: errorMsg });
 
     if (NOTIFY_ON_FAILURE) {

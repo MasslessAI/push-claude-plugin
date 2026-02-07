@@ -9,7 +9,7 @@
  * File location: ~/.config/push/machine_id
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import { homedir, hostname, platform, release, version, arch } from 'os';
 import { join, dirname } from 'path';
 import { randomUUID } from 'crypto';
@@ -90,7 +90,6 @@ export function getMachineInfo() {
 export function resetMachineId() {
   if (existsSync(MACHINE_ID_FILE)) {
     try {
-      const { unlinkSync } = require('fs');
       unlinkSync(MACHINE_ID_FILE);
     } catch {
       // Ignore errors

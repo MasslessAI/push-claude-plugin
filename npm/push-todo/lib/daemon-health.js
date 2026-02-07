@@ -197,7 +197,7 @@ function getInstalledVersion() {
  * Auto-restarts daemon if version mismatch detected.
  *
  * This prevents stale daemons from running after npm package updates.
- * See: /docs/20260204_daemon_heartbeat_status_indicator_implementation_plan.md
+ * See: /docs/20260204_daemon_heartbeat_status_indicator_implementation_plan.md (machine_registry table)
  */
 export function ensureDaemonRunning() {
   const status = getDaemonStatus();

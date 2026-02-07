@@ -298,28 +298,6 @@ export async function registerProject(gitRemote, keywords = [], description = ''
   return true;
 }
 
-/**
- * Validate machine registration.
- *
- * @param {string} machineId - Machine identifier
- * @returns {Promise<Object>} Validation result
- */
-export async function validateMachine(machineId) {
-  const response = await apiRequest('validate-machine', {
-    method: 'POST',
-    body: JSON.stringify({
-      machine_id: machineId
-    })
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Machine validation failed: ${text}`);
-  }
-
-  const data = await response.json();
-  return data;
-}
 
 /**
  * Get the current CLI version from the server.
