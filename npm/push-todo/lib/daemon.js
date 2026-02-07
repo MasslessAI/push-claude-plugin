@@ -199,6 +199,37 @@ function getVersion() {
   }
 }
 
+function getConfigValueFromFile(key, defaultValue = '') {
+  const fullKey = `PUSH_${key}`;
+  if (!existsSync(CONFIG_FILE)) return defaultValue;
+  try {
+    const content = readFileSync(CONFIG_FILE, 'utf8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith(`export ${fullKey}=`)) {
+        let value = trimmed.split('=')[1] || '';
+        value = value.trim();
+        if ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        return value;
+      }
+    }
+  } catch {}
+  return defaultValue;
+}
+
+function getAutoMergeEnabled() {
+  const v = getConfigValueFromFile('AUTO_MERGE', 'true');
+  return v.toLowerCase() === 'true' || v === '1' || v.toLowerCase() === 'yes';
+}
+
+function getAutoCompleteEnabled() {
+  const v = getConfigValueFromFile('AUTO_COMPLETE', 'true');
+  return v.toLowerCase() === 'true' || v === '1' || v.toLowerCase() === 'yes';
+}
+
 // ==================== E2EE Decryption ====================
 
 let decryptTodoField = null;
@@ -593,6 +624,83 @@ Automated PR from Push daemon for task #${displayNumber}.
       logError(`Failed to create PR: ${e.message}`);
     }
     return null;
+  }
+}
+
+/**
+ * Merge a PR into main and update local main branch.
+ * Uses `gh pr merge` for clean remote merge, then pulls locally.
+ *
+ * @returns {boolean} True if merge succeeded
+ */
+function mergePRForTask(displayNumber, prUrl, projectPath) {
+  const gitCwd = projectPath || process.cwd();
+
+  // Extract PR number from URL (e.g., https://github.com/user/repo/pull/42)
+  const prMatch = prUrl.match(/\/pull\/(\d+)/);
+  if (!prMatch) {
+    logError(`Could not extract PR number from: ${prUrl}`);
+    return false;
+  }
+  const prNumber = prMatch[1];
+
+  try {
+    execFileSync('gh', ['pr', 'merge', prNumber, '--merge', '--delete-branch'], {
+      cwd: gitCwd,
+      timeout: 60000,
+      stdio: 'pipe'
+    });
+    log(`Merged PR #${prNumber} for task #${displayNumber}`);
+
+    // Pull main locally so next worktree is up to date
+    try {
+      execFileSync('git', ['pull', '--ff-only'], {
+        cwd: gitCwd,
+        timeout: 30000,
+        stdio: 'pipe'
+      });
+      log('Updated local main branch');
+    } catch {
+      log('Could not pull main (may not be checked out), skipping local update');
+    }
+
+    return true;
+  } catch (e) {
+    const stderr = e.stderr?.toString() || e.message || '';
+    if (stderr.includes('merge conflict') || stderr.includes('conflict')) {
+      logError(`PR #${prNumber} has merge conflicts, skipping auto-merge`);
+    } else if (stderr.includes('not found') || stderr.includes('ENOENT')) {
+      log('GitHub CLI (gh) not installed, skipping merge');
+    } else {
+      logError(`Failed to merge PR #${prNumber}: ${stderr.slice(0, 200)}`);
+    }
+    return false;
+  }
+}
+
+/**
+ * Mark a task as completed via the todo-status endpoint.
+ */
+async function markTaskAsCompleted(displayNumber, taskId, comment) {
+  try {
+    const response = await apiRequest('todo-status', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        todoId: taskId,
+        isCompleted: true,
+        completedAt: new Date().toISOString(),
+        completionComment: comment || `Completed by daemon on ${getMachineName()}`
+      })
+    });
+    if (response.ok) {
+      log(`Task #${displayNumber} marked as completed`);
+      return true;
+    }
+    logError(`Failed to mark #${displayNumber} complete: HTTP ${response.status}`);
+    return false;
+  } catch (error) {
+    logError(`Failed to mark #${displayNumber} complete: ${error.message}`);
+    return false;
   }
 }
 
@@ -1000,12 +1108,27 @@ function handleTaskCompletion(displayNumber, exitCode) {
       );
     }
 
+    // Auto-merge PR into main (configurable, default ON)
+    let merged = false;
+    if (getAutoMergeEnabled() && prUrl) {
+      merged = mergePRForTask(displayNumber, prUrl, projectPath);
+    }
+
+    // Auto-complete task after successful merge (configurable, default ON)
+    const taskId = info.taskId;
+    if (getAutoCompleteEnabled() && merged && taskId) {
+      const comment = semanticSummary
+        ? `${semanticSummary} (${durationStr} on ${machineName})`
+        : `Completed in ${durationStr} on ${machineName}`;
+      markTaskAsCompleted(displayNumber, taskId, comment);
+    }
+
     completedToday.push({
       displayNumber,
       summary,
       completedAt: new Date().toISOString(),
       duration,
-      status: 'session_finished',
+      status: merged ? 'completed' : 'session_finished',
       prUrl,
       sessionId
     });

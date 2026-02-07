@@ -151,6 +151,48 @@ export function setAutoCommitEnabled(enabled) {
 }
 
 /**
+ * Check if auto-merge into main is enabled after daemon task completion.
+ * Default: true (merge PR into main after session_finished)
+ *
+ * @returns {boolean}
+ */
+export function getAutoMergeEnabled() {
+  const value = getConfigValue('AUTO_MERGE', 'true');
+  return value.toLowerCase() === 'true' || value === '1' || value.toLowerCase() === 'yes';
+}
+
+/**
+ * Set auto-merge setting.
+ *
+ * @param {boolean} enabled
+ * @returns {boolean} True if successful
+ */
+export function setAutoMergeEnabled(enabled) {
+  return setConfigValue('AUTO_MERGE', enabled ? 'true' : 'false');
+}
+
+/**
+ * Check if auto-complete is enabled after daemon task merge.
+ * Default: true (mark task as completed after successful merge)
+ *
+ * @returns {boolean}
+ */
+export function getAutoCompleteEnabled() {
+  const value = getConfigValue('AUTO_COMPLETE', 'true');
+  return value.toLowerCase() === 'true' || value === '1' || value.toLowerCase() === 'yes';
+}
+
+/**
+ * Set auto-complete setting.
+ *
+ * @param {boolean} enabled
+ * @returns {boolean} True if successful
+ */
+export function setAutoCompleteEnabled(enabled) {
+  return setConfigValue('AUTO_COMPLETE', enabled ? 'true' : 'false');
+}
+
+/**
  * Get the maximum batch size for queuing tasks.
  * Default: 5
  *
@@ -226,16 +268,24 @@ export function showSettings() {
   console.log();
 
   const autoCommit = getAutoCommitEnabled();
+  const autoMerge = getAutoMergeEnabled();
+  const autoComplete = getAutoCompleteEnabled();
   const batchSize = getMaxBatchSize();
 
-  console.log(`  auto-commit:  ${autoCommit ? 'ON' : 'OFF'}`);
-  console.log('                Auto-commit when task completes');
+  console.log(`  auto-commit:    ${autoCommit ? 'ON' : 'OFF'}`);
+  console.log('                  Auto-commit when task completes');
   console.log();
-  console.log(`  batch-size:   ${batchSize}`);
-  console.log('                Max tasks for batch queue (1-20)');
+  console.log(`  auto-merge:     ${autoMerge ? 'ON' : 'OFF'}`);
+  console.log('                  Merge PR into main after daemon task finishes');
+  console.log();
+  console.log(`  auto-complete:  ${autoComplete ? 'ON' : 'OFF'}`);
+  console.log('                  Mark task completed after successful merge');
+  console.log();
+  console.log(`  batch-size:     ${batchSize}`);
+  console.log('                  Max tasks for batch queue (1-20)');
   console.log();
   console.log('  Toggle with: push-todo setting <name>');
-  console.log('  Example:     push-todo setting auto-commit');
+  console.log('  Example:     push-todo setting auto-merge');
   console.log();
 }
 
@@ -264,6 +314,38 @@ export function toggleSetting(settingName) {
     return false;
   }
 
+  if (normalized === 'auto-merge') {
+    const current = getAutoMergeEnabled();
+    const newValue = !current;
+    if (setAutoMergeEnabled(newValue)) {
+      console.log(`Auto-merge is now ${newValue ? 'ON' : 'OFF'}`);
+      if (newValue) {
+        console.log('PRs will be merged into main after daemon task finishes.');
+      } else {
+        console.log('PRs will NOT be merged automatically.');
+      }
+      return true;
+    }
+    console.error('Failed to update setting');
+    return false;
+  }
+
+  if (normalized === 'auto-complete') {
+    const current = getAutoCompleteEnabled();
+    const newValue = !current;
+    if (setAutoCompleteEnabled(newValue)) {
+      console.log(`Auto-complete is now ${newValue ? 'ON' : 'OFF'}`);
+      if (newValue) {
+        console.log('Tasks will be marked completed after successful merge.');
+      } else {
+        console.log('Tasks will NOT be marked completed automatically.');
+      }
+      return true;
+    }
+    console.error('Failed to update setting');
+    return false;
+  }
+
   if (normalized === 'batch-size') {
     const batchSize = getMaxBatchSize();
     console.log(`Current batch size: ${batchSize}`);
@@ -272,7 +354,7 @@ export function toggleSetting(settingName) {
   }
 
   console.error(`Unknown setting: ${settingName}`);
-  console.error('Available settings: auto-commit, batch-size');
+  console.error('Available settings: auto-commit, auto-merge, auto-complete, batch-size');
   return false;
 }
 
