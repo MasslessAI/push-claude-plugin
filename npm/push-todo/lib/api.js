@@ -229,7 +229,7 @@ export async function searchTasks(query, gitRemote = null) {
  */
 export async function updateTaskExecution(payload) {
   const response = await apiRequest('update-task-execution', {
-    method: 'POST',
+    method: 'PATCH',
     body: JSON.stringify(payload)
   });
 

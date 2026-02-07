@@ -12,6 +12,9 @@ import { formatTaskForDisplay, formatSearchResult } from './utils/format.js';
 import { bold, green, yellow, red, cyan, dim, muted } from './utils/colors.js';
 import { decryptTodoField, isE2EEAvailable } from './encryption.js';
 import { getAutoCommitEnabled, getMaxBatchSize } from './config.js';
+import { writeFileSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
 /**
  * Decrypt encrypted fields in a task object.
@@ -121,7 +124,7 @@ export async function listTasks(options = {}) {
   if (!options.backlog && !options.completed && running.length > 0) {
     console.log(`# ${running.length} Running/Queued Tasks (${scope})\n`);
     for (const task of running) {
-      const displayNum = task.displayNumber || task.display_number;
+      const displayNum = task.displayNumber;
       console.log(`---\n### #${displayNum}\n`);
       console.log(formatTaskForDisplay(task));
       console.log('');
@@ -134,7 +137,7 @@ export async function listTasks(options = {}) {
 
   // Show full details for each task (matching Python behavior)
   for (const task of tasksToShow) {
-    const displayNum = task.displayNumber || task.display_number;
+    const displayNum = task.displayNumber;
     console.log(`---\n### #${displayNum}\n`);
     console.log(formatTaskForDisplay(task));
     console.log('');
@@ -183,6 +186,49 @@ export async function showTask(displayNumber, options = {}) {
   }
 
   console.log(formatTaskForDisplay(decrypted));
+
+  // Track active task for session-end hook and send running status to Supabase.
+  // Skip if task is already running or queued (daemon owns it).
+  const execStatus = decrypted.executionStatus;
+  if (execStatus !== 'running' && execStatus !== 'queued') {
+    trackActiveTask(decrypted).catch(() => {});
+  }
+}
+
+/**
+ * Track active task for foreground execution.
+ *
+ * Mirrors the daemon's behavior: sends 'running' status to Supabase
+ * and writes ~/.push/active_task.json for the session-end hook.
+ *
+ * @param {Object} task - Task object from API
+ */
+async function trackActiveTask(task) {
+  const pushDir = join(homedir(), '.push');
+  mkdirSync(pushDir, { recursive: true });
+
+  // Write active task file for session-end hook to read
+  writeFileSync(join(pushDir, 'active_task.json'), JSON.stringify({
+    displayNumber: task.displayNumber,
+    taskId: task.id,
+    startedAt: new Date().toISOString(),
+  }));
+
+  // Send running status to Supabase (same as daemon's updateTaskStatus)
+  const machineId = getMachineId();
+  const machineName = getMachineName();
+  await api.updateTaskExecution({
+    displayNumber: task.displayNumber,
+    status: 'running',
+    machineId,
+    machineName,
+    event: {
+      type: 'started',
+      timestamp: new Date().toISOString(),
+      machineName: machineName || undefined,
+      summary: 'Foreground session started',
+    },
+  });
 }
 
 /**
@@ -432,7 +478,7 @@ export async function runReview(options = {}) {
 
   // Show full details for each task (matching Python behavior)
   for (const task of decrypted) {
-    const displayNum = task.displayNumber || task.display_number;
+    const displayNum = task.displayNumber;
     console.log(`---\n### #${displayNum}\n`);
     console.log(formatTaskForDisplay(task));
     console.log('');
